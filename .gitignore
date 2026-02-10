@@ -1,0 +1,49 @@
+# macOS
+.DS_Store
+
+# zsh
+.zsh_history
+*.zwc
+.zshrc.local
+
+# nvm
+.config/nvm/
+
+# npm
+.config/configstore/update-notifier-npm.json
+
+# zsh-abbr (自動生成)
+.config/zsh-abbr/*
+
+# Vim / Neovim
+.luarc.json
+Session.vim
+
+# gh (認証情報)
+.config/gh/hosts.yml
+
+# Claude Code
+.config/claude/.claude.json
+.config/claude/.claude.json.backup*
+.config/claude/cache/
+.config/claude/debug/
+.config/claude/plugins/
+.config/claude/projects/
+.config/claude/statsig/
+.config/claude/tasks/
+.config/claude/todos/
+.config/claude/file-history/
+.config/claude/history.jsonl
+.config/claude/shell-snapshots/
+.config/claude/plans/
+.config/claude/stats-cache.json
+.config/claude/paste-cache/
+
+# lazygit
+.config/lazygit/state.yml
+
+# Serena
+.serena
+
+# czg cz-git
+.config/.czrc

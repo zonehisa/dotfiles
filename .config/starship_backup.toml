@@ -1,0 +1,125 @@
+format = """
+$os\
+$sudo\
+$custom\
+$direnv\
+$directory\
+$git_branch\
+$git_state\
+$git_status\
+$git_metrics\
+$fill\
+$conda\
+$python\
+$lua\
+$rust\
+\n$character\
+"""
+
+right_format = """
+$cmd_duration\
+$time\
+"""
+###########################################
+[os.symbols]
+Macos = "  "
+Linux = " 󰌽 "
+Ubuntu = "  "
+Debian = "  "
+
+###########################################
+[os]
+disabled = false
+format = """
+[](fg:#89b4fa)\
+[$symbol]($style)\
+[](fg:#89b4fa)\
+"""
+style = "fg:#313244 bg:#89b4fa"
+
+[sudo]
+disabled = false
+symbol = ' 󰿆 sudo'
+format = """
+[](fg:#eba0ac)\
+[$symbol]($style)\
+[](fg:#eba0ac)\
+"""
+style = "bold fg:#313244 bg:#eba0ac "
+
+[directory]
+truncation_length = 6
+truncation_symbol = ' '
+truncate_to_repo = false
+home_symbol = '󰋞 ~'
+read_only = ' 󰌾 '
+format = """
+[](fg:#b4befe)\
+[$path]($style)\
+[$read_only]($read_only_style)\
+[](fg:#b4befe)\
+"""
+style = 'bold fg:#313244 bg:#b4befe'
+read_only_style = 'bold fg:#313244 bg:#b4befe'
+
+[git_branch]
+symbol = '  '
+truncation_length = 4
+truncation_symbol = ''
+style = 'bold fg:#89dceb bg:#45475a'
+format = """
+[](fg:#45475a)\
+[$symbol$branch(:$remote_branch)]($style)\
+"""
+
+[git_status]
+disabled = false
+style = 'bold fg:#eba0ac bg:#45475a'
+conflicted = '='
+ahead = '⇡${count}'
+behind = '⇣${count}'
+diverged = '⇕'
+up_to_date = '✓'
+untracked = '?'
+stashed = '$'
+modified = '!${count}'
+renamed = '»'
+deleted = '✘'
+format = """
+[  ](fg:#89dceb bg:#45475a)\
+[$all_status$ahead_behind]($style)\
+"""
+
+[git_metrics]
+disabled = false
+added_style = 'bold fg:#a6e3a1 bg:#45475a'
+deleted_style = 'bold fg:#89b4fa  bg:#45475a'
+format = """
+[  ](fg:#89dceb bg:#45475a)\
+[+$added]($added_style)[-$deleted]($deleted_style)[](fg:#45475a)\
+"""
+
+[python]
+pyenv_version_name = false
+symbol = '[ ](fg:#f9e2af bg:#8093fd)'
+format = '[](fg:#8093fd)[ ${symbol}${pyenv_prefix}(${version})(\($virtualenv\))]($style)[](fg:#8093fd)'
+style = 'bold fg:#313244 bg:#8093fd'
+
+[lua]
+symbol = "[ ](fg:#1e66f5 bg:#89b4fa)"
+format = '[](fg:#89b4fa)[ ${symbol}(${version})]($style)[](fg:#89b4fa)'
+style = 'bold fg:#313244 bg:#89b4fa'
+
+[cmd_duration]
+show_milliseconds = true
+min_time = 100
+format = '[󰞌 $duration  ](fg:#f9e2af)'
+
+[time]
+disabled = false
+format = '[ $time](bold fg:#6c7086)'
+time_format = '%T'
+
+[character]
+success_symbol = "[❯](bold #74c7ec)[❯](bold #b4befe)[❯](bold #89b4fa)"
+error_symbol = "[❯](bold #eba0ac)[❯](bold #f38ba8)[❯](bold #f17497)"

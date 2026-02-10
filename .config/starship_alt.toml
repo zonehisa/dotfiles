@@ -1,0 +1,116 @@
+format = """
+$os\
+$sudo\
+$custom\
+$direnv\
+$directory\
+$git_branch\
+$git_state\
+$git_status\
+$git_metrics\
+$fill\
+$conda\
+$python\
+$lua\
+$rust\
+\n$character\
+"""
+
+right_format = """
+$cmd_duration\
+$time\
+"""
+###########################################
+[os.symbols]
+Macos = "  "
+Linux = " 󰌽 "
+Ubuntu = "  "
+Debian = "  "
+
+###########################################
+[os]
+disabled = false
+format = """
+[ $symbol ]($style)\
+"""
+style = "fg:#89b4fa"
+
+[sudo]
+disabled = false
+symbol = '󰿆 sudo'
+format = """
+[ $symbol ]($style)\
+"""
+style = "bold fg:#eba0ac"
+
+[directory]
+truncation_length = 6
+truncation_symbol = ' '
+truncate_to_repo = false
+home_symbol = '󰋞 ~'
+read_only = ' 󰌾 '
+format = """
+[ $path ]($style)\
+[$read_only]($read_only_style)\
+"""
+style = 'bold fg:#b4befe'
+read_only_style = 'bold fg:#b4befe'
+
+[git_branch]
+symbol = '  '
+truncation_length = 4
+truncation_symbol = ''
+style = 'bold fg:#89dceb'
+format = """
+[ $symbol$branch(:$remote_branch) ]($style)\
+"""
+
+[git_status]
+disabled = false
+style = 'bold fg:#eba0ac'
+conflicted = '='
+ahead = '⇡${count}'
+behind = '⇣${count}'
+diverged = '⇕'
+up_to_date = '✓'
+untracked = '?'
+stashed = '$'
+modified = '!${count}'
+renamed = '»'
+deleted = '✘'
+format = """
+[ $all_status$ahead_behind ]($style)\
+"""
+
+[git_metrics]
+disabled = false
+added_style = 'bold fg:#a6e3a1'
+deleted_style = 'bold fg:#89b4fa'
+format = """
+[ +$added]($added_style)[-$deleted]($deleted_style)\
+"""
+
+[python]
+pyenv_version_name = false
+symbol = ' '
+format = '[ ${symbol}${pyenv_prefix}(${version})(\($virtualenv\)) ]($style)'
+style = 'bold fg:#f9e2af'
+
+[lua]
+symbol = " "
+format = '[ ${symbol}(${version}) ]($style)'
+style = 'bold fg:#89b4fa'
+
+[cmd_duration]
+show_milliseconds = true
+min_time = 100
+format = '[󰞌 $duration  ](fg:#f9e2af)'
+
+[time]
+disabled = false
+format = '[ $time](bold fg:#6c7086)'
+time_format = '%T'
+
+[character]
+success_symbol = "[❯](bold #74c7ec)[❯](bold #b4befe)[❯](bold #89b4fa)"
+error_symbol = "[❯](bold #eba0ac)[❯](bold #f38ba8)[❯](bold #f17497)"

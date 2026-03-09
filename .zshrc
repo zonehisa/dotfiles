@@ -101,10 +101,6 @@ bindkey '^[[B' history-beginning-search-forward
 alias vim='nvim'
 alias vi='nvim'
 
-# ユーティリティ
-alias cc='claude'
-alias now='date "+%Y-%m-%d %H:%M:%S"'
-
 # ディレクトリ移動
 alias ..='cd ..'
 alias ...='../..'
@@ -404,3 +400,5 @@ fi
 # ローカル設定（gitで管理しない）
 # ============================================
 [ -f ~/.zshrc.local ] && source ~/.zshrc.local
+alias cl-test='vendor/bin/sail artisan optimize:clear && vendor/bin/sail pest --parallel --recreate-databases'
+alias cltest='vendor/bin/sail artisan optimize:clear && vendor/bin/sail pest --parallel --recreate-databases'

@@ -26,6 +26,7 @@ LINKS=(
   ".config/aerospace/aerospace.toml:.config/aerospace/aerospace.toml"
   ".config/git/ignore:.config/git/ignore"
   ".config/gh/config.yml:.config/gh/config.yml"
+  "Library/Application Support/lazygit/config.yml:.config/lazygit/config.yml"
 )
 
 # nvim (ディレクトリごとコピー/リンク)

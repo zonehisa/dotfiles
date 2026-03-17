@@ -18,6 +18,7 @@ macOSの開発環境設定ファイルをGit管理するリポジトリです。
 | **AeroSpace** | `.config/aerospace/aerospace.toml` |
 | **Git** | `.config/git/ignore` |
 | **GitHub CLI** | `.config/gh/config.yml` |
+| **lazygit** | `~/Library/Application Support/lazygit/config.yml` → `.config/lazygit/config.yml` |
 
 ## セットアップ
 

@@ -6,4 +6,4 @@ customCommands:
     command: >
       git diff --cached --quiet &&
       { echo "No staged changes. Stage files in lazygit first, then press Ctrl-g."; exit 1; } ||
-      { tmp=$(mktemp -t lazygit-codex-msg.XXXXXX) && codex exec -s read-only -o "$tmp" "Read the staged diff with git diff --cached. Generate ONLY a one-line Git commit message in Conventional Commits format (type(scope): description). Use only feat, fix, docs, style, refactor, test, chore. Output only the commit message." >/dev/null && msg=$(tr -d '\r' < "$tmp") && rm -f "$tmp" && git commit -e -m "$msg"; }
+      { tmp=$(mktemp -t lazygit-codex-msg.XXXXXX) && codex exec -m gpt-5.1-codex-mini -c model_reasoning_effort=\"medium\" -s read-only -o "$tmp" "Read the staged diff with git diff --cached. Generate ONLY a one-line Git commit message in Conventional Commits format (type(scope): description). Use only feat, fix, docs, style, refactor, test, chore. Output only the commit message." >/dev/null && msg=$(tr -d '\r' < "$tmp") && rm -f "$tmp" && git commit -e -m "$msg"; }

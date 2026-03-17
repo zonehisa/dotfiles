@@ -20,6 +20,7 @@ config = function()
     formatters_by_ft = {
       lua = { "stylua" },
       go = { "goimports", "gofmt" },
+      rust = { "rustfmt" },
       javascriptreact = { "prettierd" },
       typescriptreact = { "prettierd" },
       javascript = { "prettierd" },

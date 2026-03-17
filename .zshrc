@@ -94,6 +94,11 @@ export PROMPT_EOL_MARK=""
 bindkey '^[[A' history-beginning-search-backward
 bindkey '^[[B' history-beginning-search-forward
 
+# Ctrl-X Ctrl-E で現在のコマンドラインを nvim で編集
+autoload -Uz edit-command-line
+zle -N edit-command-line
+bindkey '^X^E' edit-command-line
+
 # ============================================
 # エイリアス - 基本
 # ============================================
@@ -395,10 +400,3 @@ fi
 if command -v starship &> /dev/null; then
     eval "$(starship init zsh)"
 fi
-
-# ============================================
-# ローカル設定（gitで管理しない）
-# ============================================
-[ -f ~/.zshrc.local ] && source ~/.zshrc.local
-alias cl-test='vendor/bin/sail artisan optimize:clear && vendor/bin/sail pest --parallel --recreate-databases'
-alias cltest='vendor/bin/sail artisan optimize:clear && vendor/bin/sail pest --parallel --recreate-databases'

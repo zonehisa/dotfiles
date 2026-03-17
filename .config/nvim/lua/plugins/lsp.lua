@@ -1,56 +1,49 @@
 return {
   "neovim/nvim-lspconfig",
-  config = function()
-    local M = {}
-    local map = vim.keymap.set
+  opts = {
+    servers = {
+      lua_ls = {
+        settings = {
+          Lua = { diagnostics = { globals = { "vim" } } },
+        },
+      },
+      ts_ls = {},
+      pyright = function()
+        local root_marker = vim.fs.find({ ".venv", ".git" }, { upward = true })[1]
+        local pyright_root = root_marker and vim.fs.dirname(root_marker) or vim.fn.getcwd()
+        local local_pyright = pyright_root .. "/.venv/bin/pyright-langserver"
 
-    -- on_attach
-    M.on_attach = function(_, bufnr)
-      local function opts(desc) return { buffer = bufnr, desc = "LSP " .. desc } end
-      map("n", "gd", vim.lsp.buf.definition, opts "Go to definition")
-      map("n", "K", vim.lsp.buf.hover, opts "Hover doc")
-      map("n", "<leader>ca", vim.lsp.buf.code_action, opts "Code action")
-    end
+        return {
+          root_dir = pyright_root,
+          cmd = vim.fn.executable(local_pyright) == 1
+            and { local_pyright, "--stdio" }
+            or { "pyright-langserver", "--stdio" },
+          filetypes = { "python" },
+        }
+      end,
+    },
+  },
+  config = function(_, opts)
+    local lsp = require("config.lsp")
+    local enabled = {}
 
-    -- disable semanticTokens
-    M.on_init = function(client, _)
-      if client.supports_method "textDocument/semanticTokens" then
-        client.server_capabilities.semanticTokensProvider = nil
+    for server, server_opts in pairs(opts.servers or {}) do
+      local config = type(server_opts) == "function" and server_opts() or server_opts
+
+      if config ~= false then
+        local final_config = vim.tbl_isempty(config or {})
+          and lsp.default_config()
+          or lsp.extend(config)
+
+        vim.lsp.config(server, final_config)
+        table.insert(enabled, server)
       end
     end
 
-    -- capabilities
-    M.capabilities = vim.lsp.protocol.make_client_capabilities()
+    table.sort(enabled)
 
-    local default_config = {
-      on_attach = M.on_attach,
-      capabilities = M.capabilities,
-      on_init = M.on_init,
-    }
-
-    -- Lua
-    vim.lsp.config("lua_ls", vim.tbl_extend("force", default_config, {
-      settings = {
-        Lua = { diagnostics = { globals = { "vim" } } },
-      },
-    }))
-
-    -- TypeScript
-    vim.lsp.config("ts_ls", default_config)
-
-    -- Python (.venv対応)
-    vim.lsp.config("pyright", vim.tbl_extend("force", default_config, {
-      root_dir = vim.fs.dirname(vim.fs.find({".venv", ".git"}, { upward = true })[1]),
-      cmd = { vim.fn.getcwd() .. "/.venv/bin/pyright-langserver", "--stdio" },
-      filetypes = { "python" },
-    }))
-
-    -- 有効化
-    vim.lsp.enable({
-      "lua_ls",
-      "ts_ls",
-      "pyright",
-    })
+    if #enabled > 0 then
+      vim.lsp.enable(enabled)
+    end
   end,
 }
-

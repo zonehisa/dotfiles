@@ -19,6 +19,7 @@ macOSの開発環境設定ファイルをGit管理するリポジトリです。
 | **Git** | `.config/git/ignore` |
 | **GitHub CLI** | `.config/gh/config.yml` |
 | **lazygit** | `~/Library/Application Support/lazygit/config.yml` → `.config/lazygit/config.yml` |
+| **Raycast Script Commands** | `~/raycast-scripts/` → `raycast-scripts/` |
 
 ## セットアップ
 
@@ -55,3 +56,7 @@ brew bundle --file=~/dotfiles/Brewfile
 ```
 
 これでシンボリックリンクを解除し、バックアップファイル (`.bak.*`) から自動で復元します。
+
+## 補足
+
+Raycast 本体の設定やインストール済み拡張は管理対象にせず、手元で作成・編集する Script Commands 用ディレクトリ `~/raycast-scripts/` だけを管理対象にしています。

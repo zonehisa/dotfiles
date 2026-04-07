@@ -27,6 +27,7 @@ LINKS=(
   ".config/git/ignore:.config/git/ignore"
   ".config/gh/config.yml:.config/gh/config.yml"
   "Library/Application Support/lazygit/config.yml:.config/lazygit/config.yml"
+  "raycast-scripts:raycast-scripts"
 )
 
 # nvim (ディレクトリごとコピー/リンク)
@@ -103,7 +104,13 @@ do_init() {
     fi
 
     mkdir -p "$(dirname "$dst")"
-    cp "$src" "$dst"
+
+    if [[ -d "$src" ]]; then
+      cp -R "$src" "$dst"
+    else
+      cp "$src" "$dst"
+    fi
+
     ok "コピー: $src → $dst"
   done
 

@@ -16,6 +16,7 @@ macOSの開発環境設定ファイルをGit管理するリポジトリです。
 | **Alacritty** | `.config/alacritty/alacritty.toml` |
 | **WezTerm** | `.config/wezterm/` (14ファイル) |
 | **AeroSpace** | `.config/aerospace/aerospace.toml` |
+| **Karabiner-Elements** | `.config/karabiner/karabiner.json` |
 | **Git** | `.config/git/ignore` |
 | **GitHub CLI** | `.config/gh/config.yml` |
 | **lazygit** | `~/Library/Application Support/lazygit/config.yml` → `.config/lazygit/config.yml` |

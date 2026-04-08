@@ -24,6 +24,7 @@ LINKS=(
   ".config/tmux/tmux.conf:.config/tmux/tmux.conf"
   ".config/alacritty/alacritty.toml:.config/alacritty/alacritty.toml"
   ".config/aerospace/aerospace.toml:.config/aerospace/aerospace.toml"
+  ".config/karabiner/karabiner.json:.config/karabiner/karabiner.json"
   ".config/git/ignore:.config/git/ignore"
   ".config/gh/config.yml:.config/gh/config.yml"
   "Library/Application Support/lazygit/config.yml:.config/lazygit/config.yml"

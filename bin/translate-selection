@@ -1,0 +1,46 @@
+#!/bin/bash
+set -euo pipefail
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/lib/selection.sh"
+
+if [ "${1:-}" = "--from-clipboard" ]; then
+    text="$(pbpaste)"
+else
+    text="$(copy_selection_to_clipboard || true)"
+fi
+
+if [ -z "$text" ]; then
+    echo "選択テキストをコピーできませんでした"
+    exit 1
+fi
+
+if echo "$text" | grep -qE '[ぁ-んァ-ヶー一-龠０-９]'; then
+    translation="$(/opt/homebrew/bin/trans -brief ja:en "$text" 2>/dev/null)"
+    echo "→ English"
+else
+    translation="$(/opt/homebrew/bin/trans -brief en:ja "$text" 2>/dev/null)"
+    echo "→ 日本語"
+fi
+
+if [ -z "$translation" ]; then
+    echo "翻訳に失敗しました"
+    exit 1
+fi
+
+printf '%s' "$translation" | /usr/bin/pbcopy
+
+if [ "$(/usr/bin/pbpaste)" != "$translation" ]; then
+    /usr/bin/osascript <<APPLESCRIPT
+set the clipboard to "$(printf '%s' "$translation" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+APPLESCRIPT
+fi
+
+notification_text="$(printf '%s' "$translation" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+notification_text="$(printf '%s' "$notification_text" | cut -c1-140)"
+
+/usr/bin/osascript <<APPLESCRIPT
+display notification "$(printf '%s' "$notification_text" | sed 's/\\/\\\\/g; s/"/\\"/g')" with title "Auto Translate EN↔JP"
+APPLESCRIPT

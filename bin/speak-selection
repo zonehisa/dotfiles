@@ -1,0 +1,26 @@
+#!/bin/bash
+set -euo pipefail
+
+export LANG="en_US.UTF-8"
+export LC_ALL="en_US.UTF-8"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$SCRIPT_DIR/lib/selection.sh"
+
+VOICE="${SPEAK_SELECTION_VOICE:-Samantha}"
+RATE="${SPEAK_SELECTION_RATE:-185}"
+
+if [ "${1:-}" = "--from-clipboard" ]; then
+    text="$(/usr/bin/pbpaste)"
+else
+    text="$(copy_selection_to_clipboard || true)"
+fi
+
+text="$(printf '%s' "$text" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+
+if [ -z "$text" ]; then
+    echo "選択テキストをコピーできませんでした"
+    exit 1
+fi
+
+/usr/bin/say -v "$VOICE" -r "$RATE" "$text"

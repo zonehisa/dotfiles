@@ -177,6 +177,41 @@
                                 "type": "basic"
                             }
                         ]
+                    },
+                    {
+                        "description": "HHKB only: Ctrl+S for speak-selection",
+                        "manipulators": [
+                            {
+                                "conditions": [
+                                    {
+                                        "identifiers": [
+                                            {
+                                                "product_id": 33,
+                                                "vendor_id": 1278
+                                            }
+                                        ],
+                                        "type": "device_if"
+                                    }
+                                ],
+                                "from": {
+                                    "key_code": "s",
+                                    "modifiers": {
+                                        "mandatory": ["control"],
+                                        "optional": []
+                                    }
+                                },
+                                "to": [
+                                    {
+                                        "key_code": "c",
+                                        "modifiers": ["left_command"]
+                                    },
+                                    {
+                                        "shell_command": "/bin/sh -c 'sleep 0.15; /Users/iroiropro/dotfiles/bin/speak-selection --from-clipboard'"
+                                    }
+                                ],
+                                "type": "basic"
+                            }
+                        ]
                     }
                 ]
             },

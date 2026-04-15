@@ -2,9 +2,27 @@
 set -euo pipefail
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export LANG="ja_JP.UTF-8"
+export LC_ALL="ja_JP.UTF-8"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib/selection.sh"
+
+notify_translation() {
+    /usr/bin/osascript - "$1" <<'APPLESCRIPT'
+on run argv
+    display notification (item 1 of argv) with title "Auto Translate EN↔JP"
+end run
+APPLESCRIPT
+}
+
+set_clipboard_fallback() {
+    /usr/bin/osascript - "$1" <<'APPLESCRIPT'
+on run argv
+    set the clipboard to (item 1 of argv)
+end run
+APPLESCRIPT
+}
 
 if [ "${1:-}" = "--from-clipboard" ]; then
     text="$(pbpaste)"
@@ -33,14 +51,12 @@ fi
 printf '%s' "$translation" | /usr/bin/pbcopy
 
 if [ "$(/usr/bin/pbpaste)" != "$translation" ]; then
-    /usr/bin/osascript <<APPLESCRIPT
-set the clipboard to "$(printf '%s' "$translation" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-APPLESCRIPT
+    set_clipboard_fallback "$translation"
 fi
 
 notification_text="$(printf '%s' "$translation" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
-notification_text="$(printf '%s' "$notification_text" | cut -c1-140)"
+notification_text="$(
+    /usr/bin/python3 -c 'import sys; print(sys.argv[1][:140])' "$notification_text"
+)"
 
-/usr/bin/osascript <<APPLESCRIPT
-display notification "$(printf '%s' "$notification_text" | sed 's/\\/\\\\/g; s/"/\\"/g')" with title "Auto Translate EN↔JP"
-APPLESCRIPT
+notify_translation "$notification_text"

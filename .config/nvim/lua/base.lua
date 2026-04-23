@@ -17,7 +17,12 @@ vim.api.nvim_create_autocmd("InsertEnter", {
 })
 
 vim.o.smartindent = true
-vim.o.clipboard = "unnamedplus"
+if vim.fn.executable("pbcopy") == 1
+  or vim.fn.executable("wl-copy") == 1
+  or vim.fn.executable("xclip") == 1
+  or vim.fn.executable("xsel") == 1 then
+  vim.o.clipboard = "unnamedplus"
+end
 vim.o.list = true
 vim.o.expandtab = true
 vim.o.tabstop = 2

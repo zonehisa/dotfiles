@@ -12,9 +12,15 @@ export ZENO_DISABLE_SOCK=1
 # ============================================
 # PATH設定
 # ============================================
-# Homebrew（macOS）
+# Homebrew の標準パスを先に通して brew / starship を解決可能にする
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    eval "$(/opt/homebrew/bin/brew shellenv)"
+    [[ -d /opt/homebrew/bin ]] && export PATH="/opt/homebrew/bin:$PATH"
+    [[ -d /opt/homebrew/sbin ]] && export PATH="/opt/homebrew/sbin:$PATH"
+fi
+
+# Homebrew（macOS / Linuxbrew）
+if command -v brew >/dev/null 2>&1; then
+    eval "$("$(command -v brew)" shellenv)"
 fi
 
 # pyenv
@@ -27,8 +33,19 @@ fi
 
 # NVM
 export NVM_DIR="$HOME/.nvm"
-[ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
-[ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"
+if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+  \. "$NVM_DIR/nvm.sh"
+elif [[ -s "/opt/homebrew/opt/nvm/nvm.sh" ]]; then
+  \. "/opt/homebrew/opt/nvm/nvm.sh"
+elif [[ -s "/usr/share/nvm/init-nvm.sh" ]]; then
+  \. "/usr/share/nvm/init-nvm.sh"
+fi
+
+if [[ -s "$NVM_DIR/bash_completion" ]]; then
+  \. "$NVM_DIR/bash_completion"
+elif [[ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ]]; then
+  \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"
+fi
 
 # Deno
 export PATH="$HOME/.deno/bin:$PATH"
@@ -40,7 +57,9 @@ export PATH="$HOME/.antigravity/antigravity/bin:$PATH"
 export PATH="$HOME/dotfiles/bin:$PATH"
 export PATH="$HOME/bin:$PATH"
 export PATH="/usr/local/bin:$PATH"
-export SSH_AUTH_SOCK="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+if [[ "$OSTYPE" == "darwin"* ]] && [[ -S "$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock" ]]; then
+  export SSH_AUTH_SOCK="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+fi
 
 # npm（Sandbox内でnpm scriptsを無効化）
 export npm_config_ignore_scripts=true
@@ -89,17 +108,28 @@ setopt INTERACTIVE_COMMENTS # コマンドラインでも#以降をコメント�
 unsetopt PROMPT_SP
 export PROMPT_EOL_MARK=""
 
+# 対話シェル判定
+is_interactive_shell() {
+    [[ -o interactive ]]
+}
+
+has_tty() {
+    [[ -t 0 && -t 1 ]]
+}
+
 # ============================================
 # キーバインド（基本）
 # ============================================
-# ↑↓キーで prefix 履歴検索
-bindkey '^[[A' history-beginning-search-backward
-bindkey '^[[B' history-beginning-search-forward
+if is_interactive_shell && has_tty; then
+    # ↑↓キーで prefix 履歴検索
+    bindkey '^[[A' history-beginning-search-backward
+    bindkey '^[[B' history-beginning-search-forward
 
-# Ctrl-X Ctrl-E で現在のコマンドラインを nvim で編集
-autoload -Uz edit-command-line
-zle -N edit-command-line
-bindkey '^X^E' edit-command-line
+    # Ctrl-X Ctrl-E で現在のコマンドラインを nvim で編集
+    autoload -Uz edit-command-line
+    zle -N edit-command-line
+    bindkey '^X^E' edit-command-line
+fi
 
 # ============================================
 # エイリアス - 基本
@@ -356,14 +386,19 @@ function ghq-fzf() {
   fi
   zle -R -c
 }
-zle -N ghq-fzf
-bindkey '^g' ghq-fzf
+
+if is_interactive_shell && has_tty; then
+    zle -N ghq-fzf
+    bindkey '^g' ghq-fzf
+fi
 
 # ============================================
 # ツール初期化
 # ============================================
 # fzf
-[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
+if is_interactive_shell && has_tty && [ -f ~/.fzf.zsh ]; then
+    source ~/.fzf.zsh
+fi
 
 # zoxide（cdの代替）
 if command -v zoxide &> /dev/null; then
@@ -380,12 +415,12 @@ if [[ -f "$HOME/.zsh-sandbox.zsh" ]]; then
 fi
 
 # sheldon（プラグイン管理 → zeno等をロード）
-if command -v sheldon &> /dev/null; then
+if is_interactive_shell && command -v sheldon &> /dev/null; then
     eval "$(sheldon source)"
 fi
 
 # Zeno キーバインド（sheldon経由でロード後に設定）
-if [[ -n $ZENO_LOADED ]]; then
+if is_interactive_shell && has_tty && [[ -n $ZENO_LOADED ]]; then
   function _zeno_completion_with_nb_space() {
     if [[ "$LBUFFER" == "nb e" || "$LBUFFER" == "nb edit" ]]; then
       LBUFFER+=" "
@@ -410,7 +445,7 @@ if [[ -n $ZENO_LOADED ]]; then
 fi
 
 # Starship（プロンプト）
-if command -v starship &> /dev/null; then
+if is_interactive_shell && command -v starship &> /dev/null; then
     eval "$(starship init zsh)"
 fi
 

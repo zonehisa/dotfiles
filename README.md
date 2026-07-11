@@ -19,6 +19,7 @@ macOS を主対象にした開発環境設定のリポジトリです。
 - `AeroSpace`: [`.config/aerospace/aerospace.toml`](./.config/aerospace/aerospace.toml)
 - `Karabiner-Elements`: [`.config/karabiner/karabiner.json`](./.config/karabiner/karabiner.json)
 - macOS 用補助スクリプト: [`bin/`](./bin)
+- Codex Skills: [`codex/skills/`](./codex/skills)
 
 ## セットアップ
 
@@ -40,6 +41,13 @@ chmod +x setup.sh
 ```
 
 `init` は `LINKS` に定義された対象だけを `~/` からこの repo へコピーします。既に repo 側にあるファイルは上書きしません。
+
+Codex Skillsは次へリンクされます。
+
+- `codex/skills/parallel-worktree` → `~/.agents/skills/parallel-worktree`
+- `codex/skills/git-workflow` → `~/.codex/skills/git-workflow`
+
+実行時registry、lock、evidenceは`${CODEX_HOME:-$HOME/.codex}/parallel-worktree`、Worktreeはadapterごとの管理領域に保持され、dotfilesでは管理しません。
 
 ## コマンド
 

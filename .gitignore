@@ -47,3 +47,9 @@ Session.vim
 
 # czg cz-git
 .config/.czrc
+
+# Codex Skill generated files and runtime state
+codex/skills/**/__pycache__/
+codex/skills/**/*.pyc
+codex/skills/**/.pytest_cache/
+codex/skills/**/.ruff_cache/

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Workflow"
+  short_description: "汎用GitとGitHub作業を安全に進める標準スキル"
+  default_prompt: "Use $git-workflow to handle a Git or GitHub workflow safely."

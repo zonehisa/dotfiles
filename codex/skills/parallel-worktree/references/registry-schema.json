@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.codex/parallel-worktree/registry-schema.json",
+  "title": "Parallel Worktree Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "repository_id", "repository", "remote", "issue",
+    "management_mode", "adapter_kind", "adapter_version", "operation_id",
+    "operation_kind", "state", "base_branch", "base_remote_ref",
+    "base_sha_at_start", "planned_branch", "owner_task_id",
+    "observer_tasks", "risk", "created_at", "updated_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "repository_id": {"type": "string", "pattern": "^[0-9a-f]{20}$"},
+    "repository": {"type": "string", "minLength": 1},
+    "remote": {"type": "string", "minLength": 1},
+    "issue": {"type": "integer", "minimum": 1},
+    "management_mode": {"enum": ["skill_managed", "codex_managed"]},
+    "adapter_kind": {"enum": ["git_worktree_app_server", "codex_desktop_managed"]},
+    "adapter_version": {"type": "string", "minLength": 1},
+    "operation_id": {"type": "string", "minLength": 8},
+    "previous_operation_id": {"type": ["string", "null"], "minLength": 8},
+    "operation_kind": {"enum": ["start", "resume", "cleanup", "adopt"]},
+    "provisioning_phase": {"type": ["string", "null"]},
+    "lease_expires_at": {"type": ["string", "null"], "format": "date-time"},
+    "reserved_worktree_slot": {"type": ["string", "null"]},
+    "reserved_at": {"type": ["string", "null"], "format": "date-time"},
+    "state": {"enum": ["provisioning", "created", "planning", "approved", "implementing", "reviewing", "pr_open", "merged", "cleanup_ready", "cleanup_pending", "archived", "blocked", "drifted", "orphaned", "failed", "cleanup_failed"]},
+    "resume_state": {"type": ["string", "null"]},
+    "base_branch": {"type": "string", "minLength": 1},
+    "base_remote_ref": {"type": "string", "pattern": "^refs/remotes/[^/]+/.+"},
+    "base_sha_at_start": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "planned_branch": {"type": "string", "minLength": 1},
+    "actual_branch": {"type": ["string", "null"]},
+    "worktree_path": {"type": ["string", "null"]},
+    "owner_task_id": {"type": ["string", "null"]},
+    "desktop_task_id": {"type": ["string", "null"]},
+    "worktree_id": {"type": ["string", "null"]},
+    "observer_tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "role", "access", "status"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "role": {"const": "independent_reviewer"},
+          "access": {"const": "read_only"},
+          "status": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "risk": {"enum": ["R0", "R1", "R2", "R3", "R4"]},
+    "resource_namespace": {
+      "type": "object",
+      "properties": {
+        "compose_project": {"type": "string"},
+        "database": {"type": "string"},
+        "cache": {"type": "string"},
+        "port": {"type": ["integer", "null"], "minimum": 1024, "maximum": 65535}
+      },
+      "additionalProperties": false
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "allowed": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "forbidden": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+      },
+      "additionalProperties": false
+    },
+    "approved_ignored_files": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": ["path", "type", "size", "sha256"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+          "type": {"enum": ["file", "symlink"]},
+          "size": {"type": "integer", "minimum": 0},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "permission_state": {"enum": ["verified", "unverified", "failed"]},
+    "permission_evidence_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "pin_state": {"enum": ["pinned", "unpinned", "unsupported", "unknown"]},
+    "retention_state": {"enum": ["verified", "unverified"]},
+    "archive_delete_contract": {"enum": ["verified", "unverified", "failed", "unsupported"]},
+    "pr": {"type": ["object", "null"]},
+    "task_inventory": {
+      "type": ["object", "null"],
+      "properties": {
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "status"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "status": {"enum": ["idle", "notLoaded"]}
+            },
+            "additionalProperties": false
+          }
+        },
+        "observed_at": {"type": "string", "format": "date-time"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "source": {"type": "string", "minLength": 1}
+      },
+      "required": ["tasks", "observed_at", "sha256", "source"],
+      "additionalProperties": false
+    },
+    "cleanup_candidate": {"type": ["object", "null"]},
+    "cleanup_authorized_at": {"type": ["string", "null"], "format": "date-time"},
+    "cleanup_approval_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "worktree_removed_at": {"type": ["string", "null"], "format": "date-time"},
+    "branch_cleanup": {"type": ["object", "null"]},
+    "final_task_inventory_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "primary_digest_before": {"type": ["string", "null"]},
+    "primary_digest_after": {"type": ["string", "null"]},
+    "last_error": {"type": ["string", "null"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"management_mode": {"const": "skill_managed"}}},
+      "then": {"properties": {"adapter_kind": {"const": "git_worktree_app_server"}, "archive_delete_contract": {"const": "unsupported"}}}
+    },
+    {
+      "if": {"properties": {"management_mode": {"const": "codex_managed"}}},
+      "then": {"properties": {"adapter_kind": {"const": "codex_desktop_managed"}}}
+    }
+  ]
+}

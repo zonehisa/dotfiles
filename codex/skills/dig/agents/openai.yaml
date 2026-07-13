@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dig"
+  short_description: "設計判断の前提と弱点を一問ずつ深く問い詰めて整理する"
+  default_prompt: "Use $dig to stress-test this plan through one question at a time."

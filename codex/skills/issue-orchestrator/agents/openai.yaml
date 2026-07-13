@@ -1,0 +1,4 @@
+interface:
+  display_name: "Issue Orchestrator"
+  short_description: "横断Issueを既存Issue運用のまま複数repo/スレッドへ展開する"
+  default_prompt: "Use $issue-orchestrator to coordinate this cross-repository issue without replacing the issue workflow."

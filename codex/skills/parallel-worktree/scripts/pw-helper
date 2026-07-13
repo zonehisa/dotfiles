@@ -1,0 +1,1360 @@
+#!/usr/bin/env python3
+"""Deterministic control-plane helper for the parallel-worktree skill."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import fcntl
+import hashlib
+import json
+import os
+import re
+import socket
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.parse
+import uuid
+from contextlib import ExitStack, contextmanager
+from pathlib import Path
+from typing import Any, Iterator
+
+
+SCHEMA_VERSION = 1
+NORMAL_STATES = {
+    "provisioning", "created", "planning", "approved", "implementing",
+    "reviewing", "pr_open", "merged", "cleanup_ready", "cleanup_pending",
+    "archived",
+}
+ERROR_STATES = {"blocked", "drifted", "orphaned", "failed", "cleanup_failed"}
+ALL_STATES = NORMAL_STATES | ERROR_STATES
+RISKS = {"R0", "R1", "R2", "R3", "R4"}
+TRANSITIONS = {
+    "provisioning": {"created"},
+    "created": {"planning"},
+    "planning": {"approved"},
+    "approved": {"implementing"},
+    "implementing": {"reviewing", "pr_open"},
+    "reviewing": {"implementing", "pr_open"},
+    "pr_open": {"implementing", "reviewing", "merged"},
+    "merged": set(),
+    "cleanup_ready": set(),
+    "cleanup_pending": {"cleanup_failed"},
+    "archived": set(),
+}
+HIGH_RISK_PATH = re.compile(
+    r"(^|/)(\.env[^/]*|[^/]*(?:secret|credential)[^/]*|[^/]*\.(?:pem|key)|"
+    r"id_rsa[^/]*|service-account[^/]*|config/secrets(?:/|$))",
+    re.IGNORECASE,
+)
+TOKEN_RE = re.compile(r"(?i)(token|password|passwd|secret|credential)=([^\s&]+)")
+
+
+class HelperError(RuntimeError):
+    pass
+
+
+def run_git(repo: Path, *args: str, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=check,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=text,
+        timeout=60,
+    )
+
+
+def run_command(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        list(args), cwd=str(cwd), check=check,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30,
+    )
+
+
+def utc_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def future_time(seconds: int) -> str:
+    value = dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=seconds)
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def parse_time(value: str) -> dt.datetime:
+    try:
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as exc:
+        raise HelperError("Registry contains an invalid lease timestamp") from exc
+
+
+def codex_home() -> Path:
+    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().resolve()
+
+
+def state_root() -> Path:
+    return codex_home() / "parallel-worktree"
+
+
+def manual_worktree_root() -> Path:
+    return codex_home() / "parallel-worktrees"
+
+
+def repo_root(repo: str | Path) -> Path:
+    path = Path(repo).expanduser().resolve()
+    result = run_git(path, "rev-parse", "--show-toplevel").stdout.strip()
+    return Path(result).resolve()
+
+
+def git_common_dir(repo: Path) -> Path:
+    raw = run_git(repo, "rev-parse", "--git-common-dir").stdout.strip()
+    path = Path(raw)
+    if not path.is_absolute():
+        path = repo / path
+    return path.resolve()
+
+
+def canonical_remote(raw: str, repo: Path) -> str:
+    raw = raw.strip()
+    scp = re.fullmatch(r"(?:[^@/]+@)?([^:]+):(.+)", raw)
+    if scp and "://" not in raw:
+        host, path = scp.groups()
+        raw = f"ssh://{host}/{path}"
+    parsed = urllib.parse.urlsplit(raw)
+    if parsed.scheme and parsed.netloc:
+        host = (parsed.hostname or "").lower()
+        port = parsed.port
+        if port and not ((parsed.scheme == "ssh" and port == 22) or (parsed.scheme == "https" and port == 443)):
+            host = f"{host}:{port}"
+        path = re.sub(r"(?:\.git)?/+$", "", parsed.path)
+        return urllib.parse.urlunsplit((parsed.scheme.lower(), host, path, "", ""))
+    local = Path(raw)
+    if not local.is_absolute():
+        local = repo / local
+    return f"file://{local.resolve()}"
+
+
+def sanitized(value: str) -> str:
+    value = TOKEN_RE.sub(lambda m: f"{m.group(1)}=<redacted>", value)
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme and parsed.hostname:
+        host = parsed.hostname
+        if parsed.port:
+            host += f":{parsed.port}"
+        value = urllib.parse.urlunsplit((parsed.scheme, host, parsed.path, parsed.query, parsed.fragment))
+    return value
+
+
+def repository_meta(repo_arg: str | Path) -> dict[str, str]:
+    root = repo_root(repo_arg)
+    remote_raw = run_git(root, "remote", "get-url", "origin").stdout.strip()
+    remote = canonical_remote(remote_raw, root)
+    common = git_common_dir(root)
+    digest = hashlib.sha256(remote.encode() + b"\0" + str(common).encode()).hexdigest()[:20]
+    return {
+        "repository": str(root),
+        "remote": sanitized(remote),
+        "repository_id": digest,
+        "common_dir": str(common),
+    }
+
+
+def validate_issue(value: str | int) -> int:
+    text = str(value)
+    if not re.fullmatch(r"[1-9][0-9]*", text):
+        raise HelperError("Issue must be a positive decimal integer")
+    return int(text)
+
+
+def validate_branch(repo: Path, branch: str) -> str:
+    if not branch or branch.startswith("-"):
+        raise HelperError("Invalid branch")
+    result = run_git(repo, "check-ref-format", "--branch", branch, check=False)
+    if result.returncode != 0:
+        raise HelperError("Branch does not pass git check-ref-format")
+    return branch
+
+
+def registry_dir(meta: dict[str, str]) -> Path:
+    return state_root() / meta["repository_id"]
+
+
+def registry_path(meta: dict[str, str], issue: int) -> Path:
+    return registry_dir(meta) / f"issue-{issue}.json"
+
+
+def lock_path(meta: dict[str, str], name: str) -> Path:
+    return registry_dir(meta) / name
+
+
+def ensure_private_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path, 0o700)
+
+
+@contextmanager
+def file_lock(path: Path, timeout: float = 10.0) -> Iterator[None]:
+    ensure_private_dir(path.parent)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    started = time.monotonic()
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() - started >= timeout:
+                    raise HelperError(f"Timed out acquiring lock: {path.name}")
+                time.sleep(0.05)
+        os.ftruncate(fd, 0)
+        os.write(fd, f"pid={os.getpid()} acquired={utc_now()}\n".encode())
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+@contextmanager
+def operation_locks(meta: dict[str, str], issue: int, repo_needed: bool = True) -> Iterator[None]:
+    with ExitStack() as stack:
+        stack.enter_context(file_lock(lock_path(meta, f"issue-{issue}.lock")))
+        if repo_needed:
+            stack.enter_context(file_lock(lock_path(meta, "repo.lock")))
+        yield
+
+
+@contextmanager
+def resource_lock() -> Iterator[None]:
+    with file_lock(state_root() / "resource.lock"):
+        yield
+
+
+def read_registry(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError as exc:
+        raise HelperError(f"Registry does not exist: {path}") from exc
+    validate_registry(data)
+    return data
+
+
+def atomic_write(path: Path, data: dict[str, Any]) -> None:
+    ensure_private_dir(path.parent)
+    data["updated_at"] = utc_now()
+    validate_registry(data)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temp = Path(temp_name)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+        os.chmod(path, 0o600)
+    finally:
+        if temp.exists():
+            temp.unlink()
+
+
+def validate_registry(data: dict[str, Any]) -> None:
+    required = {
+        "schema_version", "repository_id", "repository", "remote", "issue",
+        "management_mode", "adapter_kind", "adapter_version", "operation_id",
+        "operation_kind", "state", "base_branch", "base_remote_ref",
+        "base_sha_at_start", "planned_branch", "owner_task_id",
+        "observer_tasks", "risk", "created_at", "updated_at",
+    }
+    missing = sorted(required - data.keys())
+    if missing:
+        raise HelperError(f"Registry missing fields: {', '.join(missing)}")
+    validate_issue(data["issue"])
+    if data["schema_version"] != SCHEMA_VERSION:
+        raise HelperError("Unsupported registry schema")
+    if data["state"] not in ALL_STATES:
+        raise HelperError("Invalid state")
+    if data["risk"] not in RISKS:
+        raise HelperError("Invalid risk")
+    pair = (data["management_mode"], data["adapter_kind"])
+    allowed = {
+        ("skill_managed", "git_worktree_app_server"),
+        ("codex_managed", "codex_desktop_managed"),
+    }
+    if pair not in allowed:
+        raise HelperError("Invalid management_mode/adapter_kind pairing")
+    if pair[0] == "codex_managed":
+        raise HelperError("codex_managed is disabled until its adapter contract is verified")
+    if pair[0] == "skill_managed" and data.get("archive_delete_contract") != "unsupported":
+        raise HelperError("skill_managed requires archive_delete_contract=unsupported")
+    if not re.fullmatch(r"[0-9a-f]{20}", data["repository_id"]):
+        raise HelperError("Invalid repository_id")
+    if not re.fullmatch(r"[0-9a-f]{40,64}", data["base_sha_at_start"]):
+        raise HelperError("Invalid base SHA")
+
+
+def fingerprint_primary(repo: Path) -> str:
+    symbolic = run_git(repo, "symbolic-ref", "-q", "HEAD", check=False).stdout.encode()
+    head = run_git(repo, "rev-parse", "HEAD").stdout.encode()
+    branch_sha = b""
+    if symbolic.strip():
+        branch_sha = run_git(repo, "rev-parse", symbolic.decode().strip()).stdout.encode()
+    status_bytes = run_git(repo, "status", "--porcelain=v2", "-z", "--untracked-files=all", text=False).stdout
+    staged = run_git(repo, "diff", "--cached", "--no-ext-diff", "--binary", text=False).stdout
+    unstaged = run_git(repo, "diff", "--no-ext-diff", "--binary", text=False).stdout
+    untracked_raw = run_git(repo, "ls-files", "--others", "--exclude-standard", "-z", text=False).stdout
+    untracked_digest = hashlib.sha256()
+    for raw in sorted(filter(None, untracked_raw.split(b"\0"))):
+        rel = raw.decode("utf-8", "surrogateescape")
+        path = repo / rel
+        untracked_digest.update(raw + b"\0")
+        if path.is_symlink():
+            untracked_digest.update(b"symlink\0" + os.readlink(path).encode())
+        elif path.is_file():
+            untracked_digest.update(hashlib.sha256(path.read_bytes()).digest())
+        else:
+            untracked_digest.update(b"non-file")
+    digest = hashlib.sha256()
+    for item in (symbolic, head, branch_sha, status_bytes, staged, unstaged, untracked_digest.digest()):
+        digest.update(len(item).to_bytes(8, "big") + item)
+    return digest.hexdigest()
+
+
+def normalize_base_ref(value: str) -> tuple[str, str]:
+    if value.startswith("refs/remotes/origin/"):
+        branch = value.removeprefix("refs/remotes/origin/")
+        return branch, value
+    if value.startswith("origin/"):
+        branch = value.removeprefix("origin/")
+        return branch, f"refs/remotes/origin/{branch}"
+    raise HelperError("Base must be an explicit origin/<branch> remote ref")
+
+
+def namespace(meta: dict[str, str], issue: int) -> dict[str, Any]:
+    repo_name = re.sub(r"[^a-z0-9]+", "-", Path(meta["repository"]).name.lower()).strip("-")
+    stem = f"{repo_name}-{meta['repository_id'][:8]}-pw-{issue}"
+    return {
+        "compose_project": stem,
+        "database": stem.replace("-", "_"),
+        "cache": stem.replace("-", "_"),
+        "port": reserve_port(meta, issue),
+    }
+
+
+def port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.05)
+        # Registry reservation is the concurrency boundary. A non-mutating
+        # connect probe additionally avoids ports that already have a listener,
+        # and remains usable in sandboxes that prohibit bind(2).
+        return sock.connect_ex(("127.0.0.1", port)) != 0
+
+
+def reserve_port(meta: dict[str, str], issue: int) -> int:
+    used: set[int] = set()
+    root = state_root()
+    if root.exists():
+        for path in root.glob("*/issue-*.json"):
+            try:
+                data = json.loads(path.read_text())
+                value = data.get("resource_namespace", {}).get("port")
+                if isinstance(value, int):
+                    used.add(value)
+            except (OSError, ValueError, TypeError):
+                raise HelperError(f"Cannot safely inspect existing port reservation: {path.name}")
+    seed = int(hashlib.sha256(f"{meta['repository_id']}:{issue}".encode()).hexdigest()[:8], 16)
+    for offset in range(20_000):
+        candidate = 20_000 + ((seed + offset) % 20_000)
+        if candidate not in used and port_available(candidate):
+            return candidate
+    raise HelperError("No reservable local port found in 20000-39999")
+
+
+def command_prepare(args: argparse.Namespace) -> dict[str, Any]:
+    issue = validate_issue(args.issue)
+    risk = args.risk.upper()
+    if risk not in RISKS:
+        raise HelperError("Risk must be R0..R4")
+    if args.lease_seconds != 1800:
+        raise HelperError("Lease duration is fixed at 1800 seconds")
+    meta = repository_meta(args.repo)
+    repo = Path(meta["repository"])
+    branch = validate_branch(repo, args.planned_branch)
+    path = registry_path(meta, issue)
+    with operation_locks(meta, issue):
+        if path.exists():
+            raise HelperError("Registry already exists; use status or resume")
+        before = fingerprint_primary(repo)
+        run_git(repo, "fetch", "origin")
+        if args.base:
+            base_branch, base_ref = normalize_base_ref(args.base)
+        else:
+            sym = run_git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", check=False).stdout.strip()
+            if not sym:
+                raise HelperError("origin/HEAD is unavailable; specify --base")
+            base_branch, base_ref = normalize_base_ref(sym)
+        base_sha = run_git(repo, "rev-parse", base_ref).stdout.strip()
+        existing_branch = run_git(repo, "show-ref", "--verify", f"refs/heads/{branch}", check=False)
+        if existing_branch.returncode == 0:
+            raise HelperError("Planned branch already exists")
+        reserved_path = (manual_worktree_root() / meta["repository_id"] / f"issue-{issue}").resolve()
+        if reserved_path.exists() or reserved_path in worktree_paths(repo):
+            raise HelperError("Logical worktree slot is already occupied")
+        record: dict[str, Any] = {
+            "schema_version": SCHEMA_VERSION,
+            **{key: meta[key] for key in ("repository_id", "repository", "remote")},
+            "issue": issue,
+            "management_mode": "skill_managed",
+            "adapter_kind": "git_worktree_app_server",
+            "adapter_version": "1",
+            "operation_id": str(uuid.uuid4()),
+            "operation_kind": "start",
+            "provisioning_phase": "prepared",
+            "lease_expires_at": future_time(args.lease_seconds),
+            "reserved_worktree_slot": f"issue-{issue}",
+            "reserved_at": utc_now(),
+            "state": "provisioning",
+            "resume_state": None,
+            "base_branch": base_branch,
+            "base_remote_ref": base_ref,
+            "base_sha_at_start": base_sha,
+            "planned_branch": branch,
+            "actual_branch": None,
+            "worktree_path": str(reserved_path),
+            "owner_task_id": None,
+            "desktop_task_id": None,
+            "worktree_id": None,
+            "observer_tasks": [],
+            "risk": risk,
+            "resource_namespace": {},
+            "scope": {"allowed": [], "forbidden": []},
+            "approved_ignored_files": [],
+            "permission_state": "unverified",
+            "pin_state": "unsupported",
+            "retention_state": "unverified",
+            "archive_delete_contract": "unsupported",
+            "pr": None,
+            "primary_digest_before": before,
+            "primary_digest_after": None,
+            "last_error": None,
+            "created_at": utc_now(),
+            "updated_at": utc_now(),
+        }
+        with resource_lock():
+            record["resource_namespace"] = namespace(meta, issue)
+            atomic_write(path, record)
+    return record
+
+
+def load_context(args: argparse.Namespace, repo_needed: bool = False) -> tuple[dict[str, str], int, Path, dict[str, Any]]:
+    issue = validate_issue(args.issue)
+    meta = repository_meta(args.repo)
+    path = registry_path(meta, issue)
+    with operation_locks(meta, issue, repo_needed=repo_needed):
+        record = read_registry(path)
+    return meta, issue, path, record
+
+
+def require_operation(record: dict[str, Any], operation: str) -> None:
+    if record["operation_id"] != operation:
+        raise HelperError("Operation ID does not match registry")
+    expires = record.get("lease_expires_at")
+    if not expires or parse_time(expires) <= dt.datetime.now(dt.timezone.utc):
+        raise HelperError("Operation lease has expired; use resume to reconcile and create a new operation")
+
+
+def require_owner(record: dict[str, Any], caller_task_id: str) -> None:
+    caller = validate_task_id(caller_task_id)
+    if not record.get("owner_task_id") or record["owner_task_id"] != caller:
+        raise HelperError("Caller task is not the registered owner")
+    if record.get("permission_state") != "verified":
+        raise HelperError("Child permission profile is not verified")
+
+
+def safe_child_path(record: dict[str, Any]) -> Path:
+    raw = record.get("worktree_path")
+    if not raw:
+        raise HelperError("Registry has no worktree path")
+    path = Path(raw)
+    if path.is_symlink():
+        raise HelperError("Worktree path must not be a symlink")
+    resolved = path.resolve()
+    primary = Path(record["repository"]).resolve()
+    allowed = manual_worktree_root().resolve()
+    if resolved == primary or resolved == git_common_dir(primary):
+        raise HelperError("Worktree path collides with primary repository")
+    if not resolved.is_relative_to(allowed):
+        raise HelperError("Worktree path is outside the skill-managed root")
+    return resolved
+
+
+def worktree_paths(repo: Path) -> set[Path]:
+    output = run_git(repo, "worktree", "list", "--porcelain").stdout.splitlines()
+    return {Path(line.removeprefix("worktree ")).resolve() for line in output if line.startswith("worktree ")}
+
+
+def command_worktree_add(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        if record["management_mode"] != "skill_managed" or record["state"] != "provisioning":
+            raise HelperError("worktree-add requires a provisioning skill_managed registry")
+        child = safe_child_path(record)
+        if child.exists() or child in worktree_paths(Path(record["repository"])):
+            raise HelperError("Reserved worktree path already exists")
+        child.parent.mkdir(parents=True, exist_ok=True)
+        run_git(Path(record["repository"]), "worktree", "add", "--detach", str(child), record["base_sha_at_start"])
+        record["provisioning_phase"] = "worktree_created"
+        atomic_write(path, record)
+        return record
+
+
+def file_manifest(path: Path) -> dict[str, Any]:
+    mode = path.lstat().st_mode
+    if stat.S_ISLNK(mode):
+        kind, digest, size = "symlink", hashlib.sha256(os.readlink(path).encode()).hexdigest(), 0
+    elif stat.S_ISREG(mode):
+        data = path.read_bytes()
+        kind, digest, size = "file", hashlib.sha256(data).hexdigest(), len(data)
+    elif stat.S_ISDIR(mode):
+        kind, digest, size = "directory", None, 0
+    else:
+        kind, digest, size = "other", None, 0
+    return {"path": str(path), "type": kind, "size": size, "sha256": digest}
+
+
+def validate_ignored_manifest_item(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict) or set(raw) != {"path", "type", "size", "sha256"}:
+        raise HelperError("Ignored-file manifest item must contain path, type, size, and sha256")
+    value = raw["path"]
+    if not isinstance(value, str) or not value or len(value) > 1024:
+        raise HelperError("Ignored-file manifest path is invalid")
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts or value.startswith("-") or value == ".":
+        raise HelperError(f"Ignored-file manifest path is unsafe: {value}")
+    normalized = relative.as_posix()
+    if HIGH_RISK_PATH.search(normalized):
+        raise HelperError(f"Ignored-file manifest contains a high-risk path: {normalized}")
+    kind = raw["type"]
+    if kind not in {"file", "symlink"}:
+        raise HelperError(f"Ignored-file manifest type is unsupported: {normalized}")
+    size = raw["size"]
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise HelperError(f"Ignored-file manifest size is invalid: {normalized}")
+    if kind == "symlink" and size != 0:
+        raise HelperError(f"Ignored-file symlink size must be zero: {normalized}")
+    digest = raw["sha256"]
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise HelperError(f"Ignored-file manifest SHA-256 is invalid: {normalized}")
+    return {"path": normalized, "type": kind, "size": size, "sha256": digest}
+
+
+def command_approve_ignored_manifest(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args)
+    with operation_locks(meta, issue, repo_needed=False):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        if record["state"] != "provisioning" or record.get("provisioning_phase") != "prepared":
+            raise HelperError("Ignored-file manifest must be approved before worktree provisioning")
+        approval_path = private_evidence_file(path, args.approval_file, "approvals")
+        approval = json.loads(approval_path.read_text())
+        if not isinstance(approval, dict) or approval.get("user_approved") is not True:
+            raise HelperError("Ignored-file manifest requires explicit user approval")
+        raw_files = approval.get("files")
+        if not isinstance(raw_files, list) or len(raw_files) > 1000:
+            raise HelperError("Ignored-file manifest must contain at most 1000 files")
+        approved = [validate_ignored_manifest_item(item) for item in raw_files]
+        paths = [item["path"] for item in approved]
+        if len(paths) != len(set(paths)):
+            raise HelperError("Ignored-file manifest contains duplicate paths")
+        record["approved_ignored_files"] = sorted(approved, key=lambda item: item["path"])
+        atomic_write(path, record)
+        return record
+
+
+def command_verify_child(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        child = safe_child_path(record)
+        if child not in worktree_paths(Path(record["repository"])):
+            raise HelperError("Child is not a registered Git worktree")
+        head = run_git(child, "rev-parse", "HEAD").stdout.strip()
+        symbolic = run_git(child, "symbolic-ref", "-q", "HEAD", check=False).stdout.strip()
+        status_raw = run_git(child, "status", "--porcelain=v2", "-z", "--untracked-files=all", text=False).stdout
+        ignored_raw = run_git(child, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", text=False).stdout
+        actual_ignored = []
+        for raw in filter(None, ignored_raw.split(b"\0")):
+            rel = raw.decode("utf-8", "surrogateescape")
+            actual_ignored.append(file_manifest(child / rel) | {"path": rel})
+        approved = sorted(record.get("approved_ignored_files", []), key=lambda item: item.get("path", ""))
+        actual = sorted(actual_ignored, key=lambda item: item.get("path", ""))
+        problems = []
+        if head != record["base_sha_at_start"]:
+            problems.append("HEAD differs from base_sha_at_start")
+        if symbolic:
+            problems.append("Child is not detached")
+        if status_raw:
+            problems.append("Child has staged, unstaged, or untracked changes")
+        if actual != approved:
+            problems.append("Ignored-file manifest differs from approval")
+        if problems:
+            record["resume_state"] = record["state"]
+            record["state"] = "drifted"
+            record["last_error"] = sanitized("; ".join(problems))
+            atomic_write(path, record)
+            raise HelperError(record["last_error"])
+        record["provisioning_phase"] = "verified_clean"
+        atomic_write(path, record)
+        return record
+
+
+def command_branch_create(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        require_owner(record, args.caller_task_id)
+        if record.get("provisioning_phase") != "verified_clean":
+            raise HelperError("Child clean contract has not been verified")
+        child = safe_child_path(record)
+        branch = validate_branch(Path(record["repository"]), record["planned_branch"])
+        run_git(child, "switch", "-c", branch)
+        record["actual_branch"] = branch
+        record["provisioning_phase"] = "branch_created"
+        record["state"] = "created"
+        record["primary_digest_after"] = fingerprint_primary(Path(record["repository"]))
+        if record["primary_digest_after"] != record["primary_digest_before"]:
+            record["resume_state"] = "created"
+            record["state"] = "drifted"
+            record["last_error"] = "Primary checkout digest changed during provisioning"
+        atomic_write(path, record)
+        if record["state"] == "drifted":
+            raise HelperError(record["last_error"])
+        return record
+
+
+def command_transition(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args)
+    if args.to_state not in ALL_STATES:
+        raise HelperError("Unknown target state")
+    with operation_locks(meta, issue, repo_needed=False):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        current = record["state"]
+        if args.to_state in {"cleanup_ready", "cleanup_pending", "archived"} and current not in ERROR_STATES:
+            raise HelperError("Cleanup states may only be entered by dedicated cleanup commands")
+        if args.from_state and record["state"] != args.from_state:
+            raise HelperError(f"Expected state {args.from_state}, found {record['state']}")
+        if current in ERROR_STATES:
+            if args.to_state != record.get("resume_state"):
+                raise HelperError("Exceptional state may only return to its recorded resume_state")
+            record["resume_state"] = None
+        elif args.to_state in ERROR_STATES:
+            record["resume_state"] = current
+        elif args.to_state not in TRANSITIONS.get(current, set()):
+            raise HelperError(f"Invalid state transition: {current} -> {args.to_state}")
+        record["state"] = args.to_state
+        record["last_error"] = sanitized(args.error) if args.error else None
+        atomic_write(path, record)
+        return record
+
+
+def command_show(args: argparse.Namespace) -> dict[str, Any]:
+    _, _, _, record = load_context(args)
+    return record
+
+
+def command_status(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        repo = Path(record["repository"])
+        child = safe_child_path(record)
+        registered = child in worktree_paths(repo)
+        exists = child.exists()
+        checks: dict[str, Any] = {
+            "lease_active": bool(
+                record.get("lease_expires_at")
+                and parse_time(record["lease_expires_at"]) > dt.datetime.now(dt.timezone.utc)
+            ),
+            "worktree_exists": exists,
+            "worktree_registered": registered,
+            "path_consistent": exists == registered,
+            "task_inventory": "unverified",
+            "pr": "untracked",
+        }
+        suggested_state = record["state"]
+        if exists and registered:
+            checks["head"] = run_git(child, "rev-parse", "HEAD").stdout.strip()
+            checks["branch"] = run_git(child, "branch", "--show-current").stdout.strip() or None
+            checks["clean"] = not bool(run_git(
+                child, "status", "--porcelain=v2", "--untracked-files=all",
+            ).stdout)
+            expected_branch = record.get("actual_branch")
+            checks["branch_matches"] = expected_branch is None or checks["branch"] == expected_branch
+            if not checks["branch_matches"]:
+                suggested_state = "drifted"
+        elif not (
+            record["state"] in {"provisioning", "archived"}
+            or (record["state"] == "cleanup_pending" and record.get("worktree_removed_at"))
+        ):
+            suggested_state = "orphaned"
+        if exists != registered:
+            suggested_state = "drifted"
+        inventory = inspect_task_inventory(record, path, args.task_evidence_file)
+        expected = set() if record["state"] == "archived" else set(inventory["expected_ids"])
+        actual = set(inventory["actual_ids"])
+        checks["task_inventory"] = {
+            "observed_at": inventory["observed_at"],
+            "tasks": inventory["tasks"],
+            "extra": sorted(actual - expected),
+            "missing": sorted(expected - actual),
+        }
+        if actual - expected:
+            suggested_state = "drifted"
+        elif expected - actual:
+            suggested_state = "orphaned"
+        pr = record.get("pr")
+        if pr and pr.get("number"):
+            try:
+                current_pr = query_verified_pr(record, int(pr["number"]))
+                checks["pr"] = {
+                    key: current_pr[key]
+                    for key in ("repository", "number", "base", "head", "state", "final_head_sha")
+                }
+            except (HelperError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
+                checks["pr"] = {"verification_error": sanitized(str(exc))}
+        return {
+            "repository_id": record["repository_id"],
+            "issue": record["issue"],
+            "recorded_state": record["state"],
+            "suggested_state": suggested_state,
+            "operation_id": record["operation_id"],
+            "checks": checks,
+        }
+
+
+def validate_task_id(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", value):
+        raise HelperError("Invalid task ID")
+    return value
+
+
+def command_renew_lease(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args)
+    if args.lease_seconds != 1800:
+        raise HelperError("Lease duration is fixed at 1800 seconds")
+    with operation_locks(meta, issue, repo_needed=False):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        if record["state"] != "provisioning":
+            raise HelperError("Only a provisioning operation may renew its lease")
+        record["lease_expires_at"] = future_time(args.lease_seconds)
+        atomic_write(path, record)
+        return record
+
+
+def command_resume_operation(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        if record["operation_id"] != args.previous_operation:
+            raise HelperError("Previous operation ID does not match registry")
+        if record["state"] != args.expected_state:
+            raise HelperError(f"Expected state {args.expected_state}, found {record['state']}")
+        expires = record.get("lease_expires_at")
+        if expires and parse_time(expires) > dt.datetime.now(dt.timezone.utc):
+            raise HelperError("Existing operation lease is still active")
+        child = safe_child_path(record)
+        registered = child in worktree_paths(Path(record["repository"]))
+        effective_state = record.get("resume_state") if record["state"] in ERROR_STATES else record["state"]
+        cleanup_removed = bool(record.get("worktree_removed_at")) and effective_state == "cleanup_pending"
+        if child.exists() != registered:
+            raise HelperError("Worktree filesystem and Git registration disagree")
+        if registered:
+            head = run_git(child, "rev-parse", "HEAD").stdout.strip()
+            expected_head = record["base_sha_at_start"] if not record.get("actual_branch") else None
+            if expected_head and head != expected_head:
+                raise HelperError("Existing child HEAD does not match the provisioning base")
+            if record.get("actual_branch"):
+                branch = run_git(child, "branch", "--show-current").stdout.strip()
+                if branch != record["actual_branch"]:
+                    raise HelperError("Existing child branch does not match registry ownership")
+        elif record["state"] != "provisioning" and not cleanup_removed:
+            raise HelperError("Registered worktree is missing outside provisioning")
+        previous = record["operation_id"]
+        record["previous_operation_id"] = previous
+        record["operation_id"] = str(uuid.uuid4())
+        record["operation_kind"] = "resume"
+        record["lease_expires_at"] = future_time(1800)
+        if effective_state in {"cleanup_ready", "cleanup_pending"}:
+            if registered:
+                # Expired cleanup approval cannot be renewed. Preserve all
+                # resources and require both phases again from merged.
+                record["state"] = "merged"
+                record["resume_state"] = None
+                record["last_error"] = None
+            elif cleanup_removed:
+                # Continue only branch cleanup and final zero-task evidence.
+                record["state"] = "cleanup_pending"
+                record["resume_state"] = None
+                record["last_error"] = None
+            record["cleanup_candidate"] = None
+            record["cleanup_authorized_at"] = None
+            record["cleanup_approval_sha256"] = None
+        atomic_write(path, record)
+        return record
+
+
+def command_record_owner(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args)
+    task_id = validate_task_id(args.owner_task_id)
+    with operation_locks(meta, issue, repo_needed=False):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        existing = record.get("owner_task_id")
+        if existing and existing != task_id:
+            raise HelperError("Registry already has a different owner task")
+        record["owner_task_id"] = task_id
+        atomic_write(path, record)
+        return record
+
+
+def command_record_permission(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args)
+    if not re.fullmatch(r"[0-9a-f]{64}", args.evidence_sha256):
+        raise HelperError("Permission evidence must be a SHA-256 digest")
+    with operation_locks(meta, issue, repo_needed=False):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        if not record.get("owner_task_id"):
+            raise HelperError("Record the owner before permission evidence")
+        record["permission_state"] = "verified"
+        record["permission_evidence_sha256"] = args.evidence_sha256
+        atomic_write(path, record)
+        return record
+
+
+def command_observer_add(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args)
+    task_id = validate_task_id(args.task_id)
+    with operation_locks(meta, issue, repo_needed=False):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        if task_id == record.get("owner_task_id"):
+            raise HelperError("Owner task cannot also be an observer")
+        observers = record.setdefault("observer_tasks", [])
+        if any(item["id"] == task_id for item in observers):
+            raise HelperError("Observer is already registered")
+        observers.append({"id": task_id, "role": "independent_reviewer", "access": "read_only", "status": args.status})
+        atomic_write(path, record)
+        return record
+
+
+def validate_scope_path(value: str) -> str:
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts or not value or value.startswith("-") or value == "." or re.search(r"[*?\[]", value):
+        raise HelperError(f"Invalid scope path: {value}")
+    return value
+
+
+def path_in_scope(path: str, roots: list[str]) -> bool:
+    candidate = Path(path)
+    return any(candidate == Path(root) or Path(root) in candidate.parents for root in roots)
+
+
+def changed_paths(child: Path, cached_only: bool = False) -> set[str]:
+    paths: set[str] = set()
+    if not cached_only:
+        raw = run_git(child, "diff", "--name-only", "-z", text=False).stdout
+        paths.update(item.decode("utf-8", "surrogateescape") for item in filter(None, raw.split(b"\0")))
+        untracked = run_git(child, "ls-files", "--others", "--exclude-standard", "-z", text=False).stdout
+        paths.update(item.decode("utf-8", "surrogateescape") for item in filter(None, untracked.split(b"\0")))
+    cached = run_git(child, "diff", "--cached", "--name-only", "-z", text=False).stdout
+    paths.update(item.decode("utf-8", "surrogateescape") for item in filter(None, cached.split(b"\0")))
+    return paths
+
+
+def enforce_scope(record: dict[str, Any], child: Path, cached_only: bool = False) -> set[str]:
+    scope = record.get("scope", {})
+    allowed = scope.get("allowed", [])
+    forbidden = scope.get("forbidden", [])
+    if not allowed:
+        raise HelperError("Registry has no approved scope")
+    paths = changed_paths(child, cached_only=cached_only)
+    forbidden_hits = sorted(path for path in paths if path_in_scope(path, forbidden))
+    outside = sorted(path for path in paths if not path_in_scope(path, allowed))
+    if forbidden_hits:
+        raise HelperError(f"Changed path is forbidden: {forbidden_hits[0]}")
+    if outside:
+        raise HelperError(f"Changed path is outside approved scope: {outside[0]}")
+    return paths
+
+
+def command_set_scope(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args)
+    allowed = sorted({validate_scope_path(value) for value in args.allow})
+    forbidden = sorted({validate_scope_path(value) for value in args.forbid})
+    if not allowed:
+        raise HelperError("At least one allowed scope path is required")
+    with operation_locks(meta, issue, repo_needed=False):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        record["scope"] = {"allowed": allowed, "forbidden": forbidden}
+        atomic_write(path, record)
+        return record
+
+
+def query_verified_pr(record: dict[str, Any], number: int) -> dict[str, Any]:
+    if number < 1:
+        raise HelperError("PR number must be positive")
+    repo = Path(record["repository"])
+    repo_info = json.loads(run_command(repo, "gh", "repo", "view", "--json", "nameWithOwner").stdout)
+    slug = repo_info["nameWithOwner"]
+    pr_info = json.loads(run_command(
+        repo, "gh", "pr", "view", str(number), "--repo", slug,
+        "--json", "number,url,state,baseRefName,headRefName,headRefOid",
+    ).stdout)
+    state = str(pr_info["state"]).lower()
+    if pr_info["baseRefName"] != record["base_branch"] or pr_info["headRefName"] != record.get("actual_branch"):
+        raise HelperError("PR base/head do not match the registry")
+    return {
+        "repository": slug,
+        "number": int(pr_info["number"]),
+        "url": sanitized(pr_info["url"]),
+        "base": pr_info["baseRefName"],
+        "head": pr_info["headRefName"],
+        "state": state,
+        "final_head_sha": pr_info["headRefOid"],
+        "source": "gh_cli_verified",
+        "verified_at": utc_now(),
+    }
+
+
+def command_verify_pr(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args)
+    with operation_locks(meta, issue, repo_needed=False):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        record["pr"] = query_verified_pr(record, args.number)
+        atomic_write(path, record)
+        return record
+
+
+def private_evidence_file(record_path: Path, raw: str, directory: str) -> Path:
+    path = Path(raw).expanduser()
+    if path.is_symlink():
+        raise HelperError("Evidence file must not be a symlink")
+    resolved = path.resolve()
+    approved_root = (record_path.parent / directory).resolve()
+    if not resolved.is_relative_to(approved_root) or not resolved.is_file():
+        raise HelperError(f"Evidence file must be inside registry {directory}/")
+    mode = stat.S_IMODE(resolved.stat().st_mode)
+    if mode & 0o077:
+        raise HelperError("Evidence file must not be group/world accessible")
+    return resolved
+
+
+def inspect_task_inventory(record: dict[str, Any], record_path: Path, raw_path: str) -> dict[str, Any]:
+    evidence_path = private_evidence_file(record_path, raw_path, "evidence")
+    evidence = json.loads(evidence_path.read_text())
+    if Path(evidence.get("cwd", "")).resolve() != safe_child_path(record):
+        raise HelperError("Task inventory cwd does not match the registered worktree")
+    observed_at = parse_time(evidence.get("observed_at"))
+    if abs((dt.datetime.now(dt.timezone.utc) - observed_at).total_seconds()) > 120:
+        raise HelperError("Task inventory evidence is stale")
+    actual = evidence.get("tasks")
+    if not isinstance(actual, list):
+        raise HelperError("Task inventory must contain a task list")
+    actual_ids: list[str] = []
+    normalized: list[dict[str, str]] = []
+    for task in actual:
+        task_id = validate_task_id(task.get("id", ""))
+        status_value = task.get("status")
+        if not isinstance(status_value, str) or not status_value or len(status_value) > 64:
+            raise HelperError(f"Task has an invalid status: {task_id}")
+        actual_ids.append(task_id)
+        normalized.append({"id": task_id, "status": status_value})
+    owner_id = record.get("owner_task_id")
+    expected_ids: list[str] = []
+    if owner_id is not None:
+        if not isinstance(owner_id, str):
+            raise HelperError("Registry owner task is invalid")
+        expected_ids.append(owner_id)
+    expected_ids.extend(str(item["id"]) for item in record.get("observer_tasks", []))
+    if len(actual_ids) != len(set(actual_ids)):
+        raise HelperError("Task inventory contains duplicate IDs")
+    return {
+        "tasks": sorted(normalized, key=lambda item: item["id"]),
+        "actual_ids": sorted(actual_ids),
+        "expected_ids": sorted(expected_ids),
+        "observed_at": evidence["observed_at"],
+        "sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+        "source": evidence.get("source", "adapter"),
+    }
+
+
+def load_task_inventory(record: dict[str, Any], record_path: Path, raw_path: str) -> dict[str, Any]:
+    inventory = inspect_task_inventory(record, record_path, raw_path)
+    if inventory["actual_ids"] != inventory["expected_ids"]:
+        raise HelperError("Actual task inventory does not match owner and observers")
+    for task in inventory["tasks"]:
+        if task["status"] not in {"idle", "notLoaded"}:
+            raise HelperError(f"Task is not cleanup-safe: {task['id']}={task['status']}")
+    return {
+        key: inventory[key]
+        for key in ("tasks", "observed_at", "sha256", "source")
+    }
+
+
+def command_record_task_inventory(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args)
+    with operation_locks(meta, issue, repo_needed=False):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        record["task_inventory"] = load_task_inventory(record, path, args.evidence_file)
+        atomic_write(path, record)
+        return record
+
+
+def git_cleanup_snapshot(record: dict[str, Any]) -> dict[str, Any]:
+    child = safe_child_path(record)
+    if child not in worktree_paths(Path(record["repository"])):
+        raise HelperError("Registered worktree does not exist")
+    status = run_git(child, "status", "--porcelain=v2", "--untracked-files=all").stdout
+    if status:
+        raise HelperError("Child worktree is dirty")
+    previous_pr = record.get("pr") or {}
+    if previous_pr.get("source") != "gh_cli_verified" or not previous_pr.get("number"):
+        raise HelperError("Cleanup requires a previously verified PR")
+    pr = query_verified_pr(record, int(previous_pr["number"]))
+    record["pr"] = pr
+    if pr.get("state") != "merged":
+        raise HelperError("Cleanup requires a GitHub-verified merged PR")
+    if pr.get("base") != record["base_branch"] or pr.get("head") != record.get("actual_branch"):
+        raise HelperError("PR identity no longer matches registry")
+    head = run_git(child, "rev-parse", "HEAD").stdout.strip()
+    if head != pr.get("final_head_sha"):
+        raise HelperError("Local HEAD differs from the verified final PR head")
+    upstream = run_git(child, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", check=False).stdout.strip()
+    ahead = None
+    if upstream:
+        ahead = int(run_git(child, "rev-list", "--count", f"{upstream}..HEAD").stdout.strip())
+        if ahead != 0:
+            raise HelperError("Local branch has unpushed commits")
+    inventory = record.get("task_inventory") or {}
+    if not inventory.get("tasks"):
+        raise HelperError("Task inventory must be refreshed before cleanup")
+    observed_at = inventory.get("observed_at")
+    if not isinstance(observed_at, str):
+        raise HelperError("Task inventory must be refreshed before cleanup")
+    observed = parse_time(observed_at)
+    if abs((dt.datetime.now(dt.timezone.utc) - observed).total_seconds()) > 120:
+        raise HelperError("Task inventory must be refreshed before cleanup")
+    canonical_pr = {key: pr[key] for key in ("repository", "number", "base", "head", "state", "final_head_sha")}
+    return {
+        "worktree_path": str(child), "head": head, "status": "clean",
+        "upstream": upstream or None, "ahead": ahead,
+        "pr": canonical_pr, "tasks": inventory["tasks"],
+    }
+
+
+def command_cleanup_prepare(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        if record["state"] != "merged":
+            raise HelperError("cleanup-prepare requires state=merged")
+        record["task_inventory"] = load_task_inventory(record, path, args.task_evidence_file)
+        snapshot = git_cleanup_snapshot(record)
+        candidate = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
+        record["cleanup_candidate"] = {"id": candidate, "snapshot": snapshot, "expires_at": future_time(600)}
+        record["state"] = "cleanup_ready"
+        atomic_write(path, record)
+        return record
+
+
+def command_cleanup_authorize(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        if record["state"] != "cleanup_ready":
+            raise HelperError("cleanup-authorize requires state=cleanup_ready")
+        candidate = record.get("cleanup_candidate") or {}
+        expires_at = candidate.get("expires_at")
+        if not isinstance(expires_at, str):
+            raise HelperError("Cleanup candidate is missing, mismatched, or expired")
+        if args.candidate != candidate.get("id") or parse_time(expires_at) <= dt.datetime.now(dt.timezone.utc):
+            raise HelperError("Cleanup candidate is missing, mismatched, or expired")
+        approval_path = private_evidence_file(path, args.approval_file, "approvals")
+        approval = json.loads(approval_path.read_text())
+        if approval.get("candidate_id") != args.candidate or approval.get("user_approved") is not True:
+            raise HelperError("Approval file does not authorize this cleanup candidate")
+        prior_inventory = record.get("task_inventory") or {}
+        refreshed_inventory = load_task_inventory(record, path, args.task_evidence_file)
+        prior_observed = prior_inventory.get("observed_at")
+        if prior_observed and parse_time(refreshed_inventory["observed_at"]) <= parse_time(prior_observed):
+            raise HelperError("Phase 2 requires newer task-inventory evidence")
+        record["task_inventory"] = refreshed_inventory
+        snapshot = git_cleanup_snapshot(record)
+        current = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
+        if current != args.candidate:
+            raise HelperError("Cleanup conditions changed after Phase 1")
+        record["cleanup_authorized_at"] = utc_now()
+        record["cleanup_approval_sha256"] = hashlib.sha256(approval_path.read_bytes()).hexdigest()
+        record["state"] = "cleanup_pending"
+        atomic_write(path, record)
+        return record
+
+
+def command_fingerprint(args: argparse.Namespace) -> dict[str, str]:
+    repo = repo_root(args.repo)
+    return {"repository": str(repo), "digest": fingerprint_primary(repo)}
+
+
+def command_repo_id(args: argparse.Namespace) -> dict[str, str]:
+    return repository_meta(args.repo)
+
+
+def command_stage_scope(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        require_owner(record, args.caller_task_id)
+        allowed = record.get("scope", {}).get("allowed", [])
+        if not allowed:
+            raise HelperError("Registry has no approved stage scope")
+        child = safe_child_path(record)
+        enforce_scope(record, child)
+        run_git(child, "add", "--", *allowed)
+        staged = sorted(enforce_scope(record, child, cached_only=True))
+        return {"staged": staged}
+
+
+def approved_message_file(record_path: Path, raw: str) -> Path:
+    path = Path(raw).expanduser()
+    if path.is_symlink():
+        raise HelperError("Commit message file must not be a symlink")
+    resolved = path.resolve()
+    approved_root = (record_path.parent / "messages").resolve()
+    if not resolved.is_relative_to(approved_root) or not resolved.is_file():
+        raise HelperError("Commit message file must be inside the registry messages directory")
+    if resolved.stat().st_size > 16_384:
+        raise HelperError("Commit message file is too large")
+    return resolved
+
+
+def command_commit(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        require_owner(record, args.caller_task_id)
+        message = approved_message_file(path, args.message_file)
+        child = safe_child_path(record)
+        staged = enforce_scope(record, child, cached_only=True)
+        if not staged:
+            raise HelperError("No approved staged changes to commit")
+        run_git(child, "commit", "-F", str(message))
+        return {"head": run_git(child, "rev-parse", "HEAD").stdout.strip()}
+
+
+def command_push(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        require_owner(record, args.caller_task_id)
+        branch = record.get("actual_branch")
+        if not branch or branch != record["planned_branch"]:
+            raise HelperError("Actual branch does not match planned branch")
+        child = safe_child_path(record)
+        run_git(child, "push", "-u", "origin", branch)
+        return {"branch": branch, "head": run_git(child, "rev-parse", "HEAD").stdout.strip()}
+
+
+def command_worktree_remove(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        if record["management_mode"] != "skill_managed" or record["state"] != "cleanup_pending":
+            raise HelperError("worktree-remove requires skill_managed cleanup_pending")
+        if not record.get("cleanup_authorized_at") or not record.get("cleanup_approval_sha256"):
+            raise HelperError("Cleanup authorization is missing")
+        authorized = parse_time(record["cleanup_authorized_at"])
+        if (dt.datetime.now(dt.timezone.utc) - authorized).total_seconds() > 120:
+            raise HelperError("Cleanup authorization is stale; repeat both cleanup phases")
+        git_cleanup_snapshot(record)
+        child = safe_child_path(record)
+        run_git(Path(record["repository"]), "worktree", "remove", str(child))
+        record["worktree_removed_at"] = utc_now()
+        atomic_write(path, record)
+        return {"removed": str(child)}
+
+
+def command_branch_delete(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        branch = record.get("actual_branch")
+        if not branch or record["state"] != "cleanup_pending":
+            raise HelperError("branch-delete requires cleanup_pending with actual branch")
+        if safe_child_path(record) in worktree_paths(Path(record["repository"])):
+            raise HelperError("Worktree still exists")
+        result = run_git(Path(record["repository"]), "branch", "-d", branch, check=False)
+        outcome = {"deleted": result.returncode == 0, "message": sanitized(result.stderr.strip() or result.stdout.strip())}
+        record["branch_cleanup"] = {**outcome, "attempted_at": utc_now()}
+        atomic_write(path, record)
+        return outcome
+
+
+def command_cleanup_finalize(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        if record["state"] != "cleanup_pending":
+            raise HelperError("cleanup-finalize requires state=cleanup_pending")
+        child = safe_child_path(record)
+        if child.exists() or child in worktree_paths(Path(record["repository"])):
+            raise HelperError("Worktree still exists")
+        if not record.get("worktree_removed_at") or not record.get("branch_cleanup"):
+            raise HelperError("Worktree removal and non-force branch cleanup must be attempted first")
+        final_inventory = inspect_task_inventory(record, path, args.task_evidence_file)
+        if final_inventory["actual_ids"]:
+            raise HelperError("Registered worktree still has associated tasks")
+        record["final_task_inventory_sha256"] = final_inventory["sha256"]
+        record["state"] = "archived"
+        atomic_write(path, record)
+        return record
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def repo_issue(name: str, func: Any) -> argparse.ArgumentParser:
+        item = sub.add_parser(name)
+        item.add_argument("--repo", required=True)
+        item.add_argument("--issue", required=True)
+        item.set_defaults(func=func)
+        return item
+
+    item = sub.add_parser("repository-id")
+    item.add_argument("--repo", required=True)
+    item.set_defaults(func=command_repo_id)
+
+    item = sub.add_parser("fingerprint")
+    item.add_argument("--repo", required=True)
+    item.set_defaults(func=command_fingerprint)
+
+    item = repo_issue("prepare-start", command_prepare)
+    item.add_argument("--risk", required=True)
+    item.add_argument("--planned-branch", required=True)
+    item.add_argument("--base")
+    item.add_argument("--lease-seconds", type=int, default=1800)
+
+    for name, func in (("show", command_show), ("status", command_status), ("worktree-add", command_worktree_add), ("verify-child", command_verify_child), ("branch-create", command_branch_create), ("stage-scope", command_stage_scope), ("push", command_push), ("worktree-remove", command_worktree_remove), ("branch-delete", command_branch_delete)):
+        item = repo_issue(name, func)
+        if name not in {"show", "status"}:
+            item.add_argument("--operation", required=True)
+
+    item = repo_issue("transition", command_transition)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--from-state")
+    item.add_argument("--to-state", required=True)
+    item.add_argument("--error")
+
+    item = repo_issue("renew-lease", command_renew_lease)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--lease-seconds", type=int, default=1800)
+
+    item = repo_issue("resume-operation", command_resume_operation)
+    item.add_argument("--previous-operation", required=True)
+    item.add_argument("--expected-state", required=True, choices=sorted(ALL_STATES))
+
+    item = repo_issue("record-owner", command_record_owner)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--owner-task-id", required=True)
+
+    item = repo_issue("record-permission", command_record_permission)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--evidence-sha256", required=True)
+
+    item = repo_issue("approve-ignored-manifest", command_approve_ignored_manifest)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--approval-file", required=True)
+
+    item = repo_issue("observer-add", command_observer_add)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--task-id", required=True)
+    item.add_argument("--status", required=True)
+
+    item = repo_issue("set-scope", command_set_scope)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--allow", action="append", default=[])
+    item.add_argument("--forbid", action="append", default=[])
+
+    item = repo_issue("verify-pr", command_verify_pr)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--number", type=int, required=True)
+
+    item = repo_issue("record-task-inventory", command_record_task_inventory)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--evidence-file", required=True)
+
+    item = repo_issue("cleanup-prepare", command_cleanup_prepare)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--task-evidence-file", required=True)
+
+    item = repo_issue("cleanup-authorize", command_cleanup_authorize)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--candidate", required=True)
+    item.add_argument("--approval-file", required=True)
+    item.add_argument("--task-evidence-file", required=True)
+
+    item = repo_issue("cleanup-finalize", command_cleanup_finalize)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--task-evidence-file", required=True)
+
+    item = repo_issue("commit", command_commit)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--caller-task-id", required=True)
+    item.add_argument("--message-file", required=True)
+
+    for command_name in ("branch-create", "stage-scope", "push"):
+        target = next(action for action in sub.choices.values() if action.prog.endswith(command_name))
+        target.add_argument("--caller-task-id", required=True)
+    sub.choices["status"].add_argument("--task-evidence-file", required=True)
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        result = args.func(args)
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    except (HelperError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
+        if isinstance(exc, subprocess.CalledProcessError):
+            message = exc.stderr.strip() if isinstance(exc.stderr, str) else str(exc)
+        else:
+            message = str(exc)
+        print(json.dumps({"error": sanitized(message)}, ensure_ascii=False), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Loop Engineering"
+  short_description: "仮説検証で開発・業務改善ハーネスを育てる標準スキル"
+  default_prompt: "Use $loop-engineering to run this change through a small hypothesis, verification, and harness-improvement loop."

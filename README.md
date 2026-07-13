@@ -21,6 +21,7 @@ macOSの開発環境設定ファイルをGit管理するリポジトリです。
 | **GitHub CLI** | `.config/gh/config.yml` |
 | **lazygit** | `~/Library/Application Support/lazygit/config.yml` → `.config/lazygit/config.yml` |
 | **Raycast Script Commands** | `~/raycast-scripts/` → `raycast-scripts/` |
+| **Codex policy / Skills** | `policies/`, `codex/` |
 
 ## セットアップ
 
@@ -30,8 +31,36 @@ macOSの開発環境設定ファイルをGit管理するリポジトリです。
 git clone <your-repo-url> ~/dotfiles
 cd ~/dotfiles
 chmod +x setup.sh
-./setup.sh
+./setup.sh link
 ```
+
+`setup.sh` は既存ファイルを `*.bak.YYYYMMDD_HHMMSS` として退避してから、dotfiles へのシンボリックリンクを作成します。
+
+初回に手元の設定をこのリポジトリへ取り込みたい場合は:
+
+```bash
+./setup.sh init
+```
+
+`init` は `LINKS` に定義された対象だけを `~/` からこの repo へコピーします。既に repo 側にあるファイルは上書きしません。
+
+Codexのglobal guideと開発Skillは次へリンクされます。
+
+- `codex/AGENTS.md` → `~/.codex/AGENTS.md`
+- `codex/skills/parallel-worktree` → `~/.agents/skills/parallel-worktree`
+- `codex/skills/git-workflow` → `~/.codex/skills/git-workflow`
+- `codex/skills/dig` → `~/.codex/skills/dig`
+- `codex/skills/loop-engineering` → `~/.codex/skills/loop-engineering`
+- `codex/skills/issue-orchestrator` → `~/.codex/skills/issue-orchestrator`
+
+共通開発policyは`policies/development-workflow.md`を正本とし、次でCodex referenceと対象repositoryのAntigravity policyへ同期します。
+
+```bash
+bin/sync-development-workflow-policy --repo /path/to/repository
+bin/sync-development-workflow-policy --repo /path/to/repository --check
+```
+
+実行時registry、lock、evidenceは`${CODEX_HOME:-$HOME/.codex}/parallel-worktree`、Worktreeはadapterごとの管理領域に保持され、dotfilesでは管理しません。
 
 ### コマンド
 

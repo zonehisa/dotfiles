@@ -10,12 +10,17 @@ Handle Git and GitHub work using repository conventions discovered at runtime.
 ## Core Rules
 
 - Treat existing changes as user work; never revert unrelated changes.
-- Never commit, push, create a PR, post a review, or merge without explicit user authorization.
+- Never commit, push, create a PR, post a review, merge, or clean up resources without explicit user authorization.
+- Authorization may be scoped to a delivery bundle. `PRまで` or an equivalent explicit request authorizes commit, push, and PR creation for the same reviewed fingerprint and verified target without another pause between those steps. It never authorizes merge.
+- `cleanup` after merge/deploy authorizes one safety-checked batch for dedicated environments, merged worktrees, and branches. Preserve dirty worktrees and commits that are neither reachable nor patch-equivalent to the merged target.
+- Keep one independent review task per repository/Issue-or-branch/base/reviewer-role lifecycle. Prefer the matching saved task ID, otherwise the earliest exact match, and never steer duplicate tasks. Skip a round only when its patch, acceptance criteria, risk, and target files are unchanged; otherwise reuse the canonical task for the next numbered round.
+- Cleanup also archives completed review tasks only after their result and task ID are recorded. Preserve active, unread, result-uncollected, and sole-evidence tasks.
 - Read repository `AGENTS.md`, `README.md`, contributing docs, and relevant local skills before acting.
 - Detect the repository, default branch, conventions, labels, test commands, and current state instead of hardcoding them.
 - Stop and ask one narrow question only when the next action could damage user work, publish externally, or target the wrong Issue/PR.
 - Keep the configured global default unless the user changes it. For Issue work and independent review, follow the phase and risk-based model routing in the selected reference.
 - Do not use subagents merely to save tokens. They duplicate setup context; use them only for genuinely independent parallel work when allowed.
+- Do not recommend or perform merge while required CI checks are pending or failing. This gate has no conversational override.
 - When a task is owned by an active `parallel-worktree` registry/context packet, keep read-only Git inspection here but route every mutating Git operation through that skill's `pw-helper`. Never bypass its operation ID, ownership, scope, lock, or cleanup checks.
 
 ## Route to One Reference

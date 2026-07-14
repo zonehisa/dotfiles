@@ -3,7 +3,24 @@ local M = {}
 local NB_CMD = "NB_EDITOR=: NO_COLOR=1 nb"
 
 function M.get_nb_dir()
-  return "/Users/iroiropro/ghq/github.com/zonehisa/nb"
+  local env_dir = vim.env.NB_DIR
+  if env_dir and env_dir ~= "" then
+    return env_dir
+  end
+
+  local candidates = {
+    "/Users/iroiropro/ghq/github.com/zonehisa/nb",
+    vim.fn.expand("~/ghq/github.com/zonehisa/nb"),
+    vim.fn.expand("~/nb"),
+  }
+
+  for _, candidate in ipairs(candidates) do
+    if vim.fn.isdirectory(candidate) == 1 then
+      return candidate
+    end
+  end
+
+  return candidates[2]
 end
 
 function M.run_cmd(args)
@@ -132,8 +149,17 @@ function M.import_image(source_path, filename)
 end
 
 function M.import_clipboard_image(filename)
-  if vim.fn.executable("pngpaste") ~= 1 then
-    return nil, "pngpaste is not installed"
+  local capture_cmd = nil
+  if vim.fn.executable("pngpaste") == 1 then
+    capture_cmd = "pngpaste"
+  elseif vim.fn.executable("wl-paste") == 1 then
+    capture_cmd = "wl-paste --type image/png >"
+  elseif vim.fn.executable("xclip") == 1 then
+    capture_cmd = "xclip -selection clipboard -t image/png -o >"
+  end
+
+  if not capture_cmd then
+    return nil, "No clipboard image command found"
   end
 
   local dest = vim.trim(filename or "")
@@ -143,7 +169,7 @@ function M.import_clipboard_image(filename)
 
   local tmp = "/tmp/" .. dest
   local escaped_tmp = vim.fn.shellescape(tmp)
-  local paste_ok = vim.fn.system("pngpaste " .. escaped_tmp)
+  vim.fn.system(capture_cmd .. " " .. escaped_tmp)
   if vim.v.shell_error ~= 0 then
     pcall(vim.fn.delete, tmp)
     return nil, "Clipboard does not contain an image"

@@ -29,6 +29,9 @@ LINKS=(
   ".config/gh/config.yml:.config/gh/config.yml"
   "Library/Application Support/lazygit/config.yml:.config/lazygit/config.yml"
   "raycast-scripts:raycast-scripts"
+  ".agents/skills/parallel-worktree:codex/skills/parallel-worktree"
+  ".codex/AGENTS.md:codex/AGENTS.md"
+  ".codex/skills/git-workflow:codex/skills/git-workflow"
 )
 
 # nvim (ディレクトリごとコピー/リンク)
@@ -144,12 +147,10 @@ do_link() {
       continue
     fi
 
-    # 既存ファイルをバックアップ
-    if [[ -e "$link_path" ]] && [[ ! -L "$link_path" ]]; then
+    # 既存ファイル・リンクをバックアップ
+    if [[ -e "$link_path" ]] || [[ -L "$link_path" ]]; then
       mv "$link_path" "${link_path}${BACKUP_SUFFIX}"
       warn "バックアップ: $link_path → ${link_path}${BACKUP_SUFFIX}"
-    elif [[ -L "$link_path" ]]; then
-      rm "$link_path"
     fi
 
     mkdir -p "$(dirname "$link_path")"
@@ -164,6 +165,8 @@ do_link() {
 do_unlink() {
   info "シンボリックリンクを解除します..."
 
+  local latest_bak candidate
+
   for entry in "${LINKS[@]}"; do
     link_path="$HOME/${entry%%:*}"
     target="$DOTFILES_DIR/${entry##*:}"
@@ -172,8 +175,16 @@ do_unlink() {
       rm "$link_path"
       ok "リンク解除: $link_path"
 
-      # 最新のバックアップがあれば復元
-      latest_bak=$(ls -1t "${link_path}.bak."* 2>/dev/null | head -1)
+      # 最新のバックアップがあれば復元する。候補なしでも set -e で終了しない。
+      latest_bak=""
+      if compgen -G "${link_path}.bak.*" >/dev/null; then
+        for candidate in "${link_path}.bak."*; do
+          if [[ -z "$latest_bak" || "$candidate" > "$latest_bak" ]]; then
+            latest_bak="$candidate"
+          fi
+        done
+      fi
+
       if [[ -n "$latest_bak" ]]; then
         mv "$latest_bak" "$link_path"
         ok "復元: $latest_bak → $link_path"

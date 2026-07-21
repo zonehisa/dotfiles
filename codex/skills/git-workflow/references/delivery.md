@@ -2,7 +2,7 @@
 
 ## Independent Diff Review Gate
 
-Run this gate once after implementation and user-feedback iterations are verified, when the user explicitly requests review, or immediately before completion, commit, or PR preparation. Do not run it after every TDD or UI-adjustment loop. Skip only typo, copy, comment, or obvious formatting-only changes.
+Run this gate once after implementation and user-feedback iterations are verified, when the user explicitly requests review, or immediately before completion, commit, or PR preparation. Do not run it after every TDD or UI-adjustment loop. R0 and R1 changes do not require independent AI review; R1 is limited to static presentation with no behavioral bindings.
 
 ### Review Risk Rank
 
@@ -11,27 +11,37 @@ Classify the complete frozen diff before creating the review task. For mixed cha
 | Rank | Typical changes | Independent review |
 |---|---|---|
 | R0 | Copy, comments, obvious formatting only | Skip |
-| R1 | CSS, colors, spacing, static markup with no behavioral bindings | GPT-5.6 Luna, `high` |
+| R1 | CSS, colors, spacing, static markup with no behavioral bindings | Skip |
 | R2 | Hover/focus/click behavior, JavaScript/Alpine, reactive bindings, display conditions | GPT-5.6 Terra, `high` |
 | R3 | Persistence, queries, state transitions, authorization, public contracts/APIs | GPT-5.6 Sol, `high` |
 | R4 | Security boundaries, credible data-loss/corruption risk, concurrency/locking, critical incidents | GPT-5.6 Sol, `xhigh` |
 
 Do not rank a change as R1 merely because it is presented as UI work: events, bindings, conditions, navigation behavior, or data access make it R2 or higher. Record the selected rank and reason in the review evidence.
 
-If the reviewer discovers a higher-risk class, continue the same review task with the higher rank's model and reasoning effort and require review of the full frozen diff again. Do not create another task solely for escalation. Never automatically downgrade a review rank.
+If a higher-risk class is discovered during Round 1, continue the same review task with the higher rank's model and reasoning effort and complete Round 1 as a full review. If a higher-risk class is discovered during Round 2, stop and require explicit user approval before a full Round 3. Do not create another task solely for escalation. Never automatically downgrade a review rank.
+
+### v1.1-lite Review Rounds
+
+- These rules apply only to review lifecycles created after v1.1-lite takes effect; do not rewrite an existing lifecycle.
+- Round 1 is a full review of the complete frozen diff.
+- Round 2 receives only the prior findings, their fix delta, directly affected paths, the new fingerprint, and existing successful test evidence.
+- Review normally stops after two rounds. Round 3 requires explicit user approval. If P0-P2 remain after Round 3, stop delivery. Do not automatically create a new lifecycle.
+- Use one independent review task and the existing `review_fingerprint.py`; do not add another review-state mechanism.
+- Do not rerun successful implementation-side tests. Do not reread unchanged specifications, prior conversation, or prior tool output.
+- P0-P2 block commit and PR creation.
 
 1. Run `git status --short`, stage the complete intended review scope only, then run `scripts/review_fingerprint.py --base <base-ref>`. The fingerprint represents the staged index; unstaged and untracked files are outside that review and must be reported and kept out of delivery. Freeze the staged paths plus `patch_base_tree` and `patch_hash`. Review dirty submodules separately first.
 2. Build `review_lifecycle_key = repository + Issue/branch + base + reviewer_role`, `review_round_key = review_lifecycle_key + patch_base_tree + patch_hash`, and `review_context_key = acceptance_criteria + risk + target_files`. Before creating anything, inspect the saved `review.task_id` and search candidates by `Review <repository> #<issue-or-branch>`. The title is discovery only; read each candidate and require the full lifecycle to match. Use the saved task ID when it matches; otherwise choose the earliest-created exact lifecycle match. Treat all other exact matches as duplicates and never send them another request. Skip submission only when both round and context keys are unchanged; if the patch or context changed, send `Round N` to the canonical task. Create a task only when no exact lifecycle task exists. Do not fork the implementation task or substitute self-review/subagents.
-3. Give it only acceptance criteria, repository/base/branch, the complete frozen-diff scope, exact fingerprint, and checks already run. Do not include implementation conclusions or suspected safe areas.
+3. For Round 1, give it only acceptance criteria, repository/base/branch, the complete frozen-diff scope, exact fingerprint, and checks already run. For an allowed later round, give only the prior findings, fix delta, directly affected paths, new fingerprint, and existing test evidence. Do not include implementation conclusions or suspected safe areas.
 4. Require concise, read-only, findings-first P0-P3 output with file/line evidence. Prioritize correctness, regression, contracts, state transitions, locking/authorization, security/privacy, performance, maintainability, and missing tests. Do not restate satisfied requirements or unchanged code.
 5. Ask the reviewer for a final-only response with no progress narration. Require the final output to repeat the fingerprint. A no-findings result contains only fingerprint, severity counts, residual risks, and unverified areas. The coordinator polls status quietly and relays only the final short report.
 6. Classify every finding as accepted, rejected with evidence, or requiring user input.
 7. Batch accepted P0-P2 fixes, adding the smallest regression test/sensor first when feasible, then run the nearest verification. Treat P3 as advisory and defer it unless it violates acceptance criteria or the user explicitly includes it.
-8. Restage the complete intended scope, freeze a new fingerprint once after the fix batch, and ask the same review task to re-review as the next numbered round. Repeat until no P0-P2 remains; do not create another task or re-review solely for deferred P3.
+8. Restage the complete intended scope, freeze a new fingerprint once after the fix batch, and ask the same review task to re-review as Round 2. Do not create another task or re-review solely for deferred P3. A Round 3 requires explicit user approval; if blocking findings remain afterward, stop.
 9. If independent task creation/reading is unavailable, stop the completion/commit/PR gate and ask the user to create it.
 10. Immediately before commit, recompute the staged-tree fingerprint. Any staged-tree change requires re-review. After commit, run the fingerprint script with `--content-base <reviewed-head>` and require `index_matches_head`, a matching content hash, and no residual review-target changes before tying the commit SHA to review evidence.
 11. Immediately before PR creation, require a clean tree, matching target, and either the reviewed clean-state HEAD or the commit SHA recorded directly after the reviewed working-tree commit. Additional or amended changes require re-review. A moved base does not require re-review only when the old reviewed and new fingerprints prove the same `patch_base_tree` and `patch_hash`, acceptance criteria and risk are unchanged, and both fingerprints are retained in the evidence; otherwise re-review.
-12. User feedback or code changes after review invalidate the reviewed state; finish the new batch and run one final review at the next review/completion/commit/PR boundary.
+12. User feedback or code changes after review invalidate the reviewed state; finish the new batch and use the next permitted round. If no permitted round remains, stop delivery and ask the user for direction.
 
 Report the review rank and reason, review task, model/reasoning effort, fingerprint, reviewed commit when applicable, rounds, unique findings, classification counts, promoted tests/sensors, verification, and unverified scope. Promote project-specific defect classes to tests or `HARNESS.md`; record escaped reviewed defects in `RETRO.md`.
 

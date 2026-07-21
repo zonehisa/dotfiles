@@ -7,7 +7,7 @@
 | Risk | 代表例 | Plan / dig | 実装 / TDD | 独立レビュー |
 | --- | --- | --- | --- | --- |
 | R0 | typo、文言、コメント、明白な整形 | Sol medium | Terra medium | 不要 |
-| R1 | CSS、色、余白、静的markup | Sol medium | Terra medium | Luna high |
+| R1 | CSS、色、余白、behavioral bindingのない静的markup | Sol medium | Terra medium | 不要 |
 | R2 | hover/focus/click、JS、reactive binding、通常の挙動変更 | Sol high | Terra medium | Terra high |
 | R3 | 永続化、query、状態遷移、認可、公開契約 | Sol xhigh | Terra medium | Sol high |
 | R4 | security境界、data loss、競合・lock、重大incident | Sol xhigh | Terra medium | Sol xhigh |
@@ -41,17 +41,26 @@
 
 ## Independent review gate
 
-独立レビューはTDDやUI調整の各loopでは行わず、明示review、完了、`cm`、`pr`の境界でreview対象全体をstageし、staged indexを正本として1回行う。unstaged/untrackedは別管理する。R0だけ`not_required`を許可する。R1以上は実装担当と別の新規Codex taskを使い、self-reviewや同じ会話を継承したsubagentで代替しない。
+独立レビューはTDDやUI調整の各loopでは行わず、明示review、完了、`cm`、`pr`の境界でreview対象全体をstageし、staged indexを正本として行う。unstaged/untrackedは別管理する。R0 / R1は独立AI reviewを不要とし、`not_required`を許可する。R2以上は実装担当と別の新規Codex taskを使い、self-reviewや同じ会話を継承したsubagentで代替しない。
 
 Review: task_id/oldest exact per review_lifecycle_key. Same review_round_key+review_context_key: no duplicate sends. Collect canonical result. Archive collected+completed only; keep active/unread/result-uncollected/sole evidence.
 
 Review状態は次の通り扱う。
 
-- `not_required`: R0と確定した場合だけ配送可能。
+- `not_required`: R0またはbehavioral bindingのないR1と確定した場合だけ配送可能。
 - `approved`: 独立review task ID、review日時、保存済みfingerprintが存在し、現在値と一致する場合だけ配送可能。
 - `pending` / `stale`: commit、push、PR作成を停止する。
 
-P0-P2、採用P3、test、公開挙動、Plan、認証・認可、DB、契約の変更は差分を再固定し、同じtaskへ再提出する。Fingerprint不一致は`stale`だが、base移動前後の`patch_base_tree`と`patch_hash`が一致し、受け入れ条件・risk・対象fileが不変なら両fingerprintを残して継承できる。R0変更も表示し、人の軽微確認なしに通過させない。
+P0-P2、採用P3、test、公開挙動、Plan、認証・認可、DB、契約の変更は差分を再固定し、許可された次Roundで同じtaskへ再提出する。Fingerprint不一致は`stale`だが、base移動前後の`patch_base_tree`と`patch_hash`が一致し、受け入れ条件・risk・対象fileが不変なら両fingerprintを残して継承できる。R0 / R1変更も表示し、人の軽微確認なしに通過させない。
+
+### v1.1-lite round policy
+
+- v1.1-liteは適用開始後に作成する新規review lifecycleだけを対象とし、開始済みlifecycleの運用は変更しない。
+- Round 1はreview対象全体のfull reviewとする。Round 2は直前findingの修正差分と直接影響先だけを同じ独立review taskへ渡す。
+- 通常は最大2Roundとする。Round 3はユーザーが明示承認した場合だけ実行する。
+- Round 3後もP0〜P2が残る場合は配送を停止し、自動で新規lifecycleを作らない。
+- 実装側の成功済みtestをreviewerが再実行しない。Round 2では不変仕様、過去会話、過去tool outputを再読しない。
+- P0〜P2が残る間はcommit / PRを禁止する。review証跡には既存のreview_fingerprint.pyだけを使用し、新しいstate管理機構を追加しない。
 
 Reviewerはprogressなしのfinal-only短報とし、Coordinatorはstatusだけをpollする。findingがあればseverityとfile/line根拠を含め、なければ件数、fingerprint、残余risk、未検証範囲だけを返す。
 

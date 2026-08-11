@@ -4,13 +4,13 @@
 
 ## Risk routing
 
-| Risk | 代表例 | Plan / dig | 実装 / TDD | 独立レビュー |
+| Risk | 代表例 | Plan / dig | 実装 / TDD | レビュー |
 | --- | --- | --- | --- | --- |
 | R0 | typo、文言、コメント、明白な整形 | Sol medium | Terra medium | 不要 |
-| R1 | CSS、色、余白、静的markup | Sol medium | Terra medium | Luna high |
-| R2 | hover/focus/click、JS、reactive binding、通常の挙動変更 | Sol high | Terra medium | Terra high |
-| R3 | 永続化、query、状態遷移、認可、公開契約 | Sol xhigh | Terra medium | Sol high |
-| R4 | security境界、data loss、競合・lock、重大incident | Sol xhigh | Terra medium | Sol xhigh |
+| R1 | CSS、色、余白、静的markup | Sol medium | Terra medium | fresh-context Luna subagent max |
+| R2 | hover/focus/click、JS、reactive binding、通常の挙動変更 | Sol high | Terra medium | fresh-context Luna subagent max |
+| R3 | 永続化、query、状態遷移、認可、公開契約 | Sol xhigh | Terra medium | fresh-context Luna subagent max |
+| R4 | security境界、data loss、競合・lock、重大incident | Sol xhigh | Terra medium | fresh-context Luna subagent max |
 
 最初にriskを決め、混在差分は最高riskを使う。UIでもイベント、表示条件、navigation、data accessを含めばR2以上とする。Codex以外は利用可能なmodelで同じ工程を守る。
 
@@ -24,6 +24,14 @@
 6. UI-onlyは画面確認から始め、binding、保存、条件、認可、queryへ影響すればTDDへ昇格する。
 
 既存のdirty差分はユーザー作業として保護する。stash、reset、clean、無関係な整形・stage・commitを行わない。
+
+## Git workflow operator
+
+Git workflow operator: agent_id per repository/Issue-or-branch lifecycle. R1〜R4のcompletion reviewを除く`ic`、`is`、`cm`、`pr`、`prr`、`prf`、`cleanup`は、`fork_turns = "none"`の`git_operator_luna`へ委譲し、GPT-5.6 Luna `max`、workspace-writeを固定する。同じworkflowの承認後follow-upは同じagentへ送る。
+
+Coordinatorはユーザー対話と権限判断を保持し、repository、Issue/branch/base、要求operation、現在state、明示された権限だけをcontext packetで渡す。packetにない外部write権限をoperatorへ推測させず、operator自身のcompletion diffをreviewさせない。completion gateは別のfresh-context `reviewer_luna`を使う。
+
+`git_operator_luna`を作成・確認できない場合はworkflowを止め、Coordinatorや別modelへfallbackしない。既存の`parallel-worktree` lifecycleで別taskがownerの場合は、そのownerを偽装せず、必要な`pw-helper` operationをCoordinatorへ返す。
 
 ## Explicit authorization
 
@@ -39,21 +47,23 @@
 
 短縮指示が意味する権限を越えて、外部状態を変更しない。
 
-## Independent review gate
+## Risk-routed review gate
 
-独立レビューはTDDやUI調整の各loopでは行わず、明示review、完了、`cm`、`pr`の境界でreview対象全体をstageし、staged indexを正本として1回行う。unstaged/untrackedは別管理する。R0だけ`not_required`を許可する。R1以上は実装担当と別の新規Codex taskを使い、self-reviewや同じ会話を継承したsubagentで代替しない。
+レビューはTDDやUI調整の各loopでは行わず、明示review、完了、`cm`、`pr`の境界でreview対象全体をstageし、staged indexを正本として1回行う。unstaged/untrackedは別管理する。R0だけ`not_required`を許可する。R1〜R4は`fork_turns = "none"`で実装履歴を継承しないread-onlyの`reviewer_luna`を使う。
 
-Review: task_id/oldest exact per review_lifecycle_key. Same review_round_key+review_context_key: no duplicate sends. Collect canonical result. Archive collected+completed only; keep active/unread/result-uncollected/sole evidence.
+Subagent review: agent_id per review_lifecycle_key. Same review_round_key+review_context_key: no duplicate sends. Collect canonical result. 有効なreview後の変更は同じagentへ`Round N`として送る。
+
+全差分を確認できない状態またはfingerprint不一致のreviewは無効とし、差分を再固定して新しいfresh-contextの`reviewer_luna`でやり直す。P0〜P2やrisk再分類ではrouteを変えず、修正後の全差分を同じagentへ再提出する。subagentを作成・確認できない場合は完了扱いを止め、別taskや別modelへfallbackしない。
 
 Review状態は次の通り扱う。
 
 - `not_required`: R0と確定した場合だけ配送可能。
-- `approved`: 独立review task ID、review日時、保存済みfingerprintが存在し、現在値と一致する場合だけ配送可能。
+- `approved_subagent`: R1〜R4でreviewer agent ID、review日時、保存済みfingerprintが存在し、reviewが有効で、現在値と一致する場合だけ配送可能。
 - `pending` / `stale`: commit、push、PR作成を停止する。
 
-P0-P2、採用P3、test、公開挙動、Plan、認証・認可、DB、契約の変更は差分を再固定し、同じtaskへ再提出する。Fingerprint不一致は`stale`だが、base移動前後の`patch_base_tree`と`patch_hash`が一致し、受け入れ条件・risk・対象fileが不変なら両fingerprintを残して継承できる。R0変更も表示し、人の軽微確認なしに通過させない。
+P0-P2、採用P3またはその他の変更は差分を再固定し、現在の正本reviewerへ再提出する。Fingerprint不一致は`stale`だが、base移動前後の`patch_base_tree`と`patch_hash`が一致し、受け入れ条件・risk・対象fileが不変なら両fingerprintを残して継承できる。R0変更も表示し、人の軽微確認なしに通過させない。
 
-Reviewerはprogressなしのfinal-only短報とし、Coordinatorはstatusだけをpollする。findingがあればseverityとfile/line根拠を含め、なければ件数、fingerprint、残余risk、未検証範囲だけを返す。
+Reviewerはprogressなしのfinal-only短報とし、Coordinatorは完了通知を1回待つ。定期的なbusy pollをしない。findingがあればseverityとfile/line根拠を含め、なければ件数、fingerprint、残余risk、未検証範囲だけを返す。
 
 ## Merge and cleanup gates
 

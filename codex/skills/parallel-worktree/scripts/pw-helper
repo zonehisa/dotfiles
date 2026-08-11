@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+LEGACY_SCHEMA_VERSION = 1
 NORMAL_STATES = {
     "provisioning", "created", "planning", "approved", "implementing",
     "reviewing", "pr_open", "merged", "cleanup_ready", "cleanup_pending",
@@ -273,12 +274,34 @@ def validate_registry(data: dict[str, Any]) -> None:
     if missing:
         raise HelperError(f"Registry missing fields: {', '.join(missing)}")
     validate_issue(data["issue"])
-    if data["schema_version"] != SCHEMA_VERSION:
+    schema_version = data["schema_version"]
+    if schema_version not in {LEGACY_SCHEMA_VERSION, SCHEMA_VERSION}:
         raise HelperError("Unsupported registry schema")
     if data["state"] not in ALL_STATES:
         raise HelperError("Invalid state")
     if data["risk"] not in RISKS:
         raise HelperError("Invalid risk")
+    observers = data["observer_tasks"]
+    if not isinstance(observers, list):
+        raise HelperError("Registry observer_tasks must be an array")
+    if schema_version == SCHEMA_VERSION and observers:
+        raise HelperError("Schema v2 observer_tasks must be empty; use reviewer_luna subagents outside the desktop task inventory")
+    if schema_version == LEGACY_SCHEMA_VERSION:
+        seen_observers: set[str] = set()
+        for observer in observers:
+            if not isinstance(observer, dict) or set(observer) != {"id", "role", "access", "status"}:
+                raise HelperError("Legacy observer task has invalid fields")
+            task_id = observer["id"]
+            if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", task_id):
+                raise HelperError("Legacy observer task has an invalid ID")
+            if task_id == data["owner_task_id"] or task_id in seen_observers:
+                raise HelperError("Legacy observer task ownership is ambiguous")
+            if observer["role"] != "independent_reviewer" or observer["access"] != "read_only":
+                raise HelperError("Legacy observer task role/access is invalid")
+            status_value = observer["status"]
+            if not isinstance(status_value, str) or not status_value or len(status_value) > 64:
+                raise HelperError("Legacy observer task status is invalid")
+            seen_observers.add(task_id)
     pair = (data["management_mode"], data["adapter_kind"])
     allowed = {
         ("skill_managed", "git_worktree_app_server"),
@@ -789,22 +812,6 @@ def command_record_permission(args: argparse.Namespace) -> dict[str, Any]:
         return record
 
 
-def command_observer_add(args: argparse.Namespace) -> dict[str, Any]:
-    meta, issue, path, _ = load_context(args)
-    task_id = validate_task_id(args.task_id)
-    with operation_locks(meta, issue, repo_needed=False):
-        record = read_registry(path)
-        require_operation(record, args.operation)
-        if task_id == record.get("owner_task_id"):
-            raise HelperError("Owner task cannot also be an observer")
-        observers = record.setdefault("observer_tasks", [])
-        if any(item["id"] == task_id for item in observers):
-            raise HelperError("Observer is already registered")
-        observers.append({"id": task_id, "role": "independent_reviewer", "access": "read_only", "status": args.status})
-        atomic_write(path, record)
-        return record
-
-
 def validate_scope_path(value: str) -> str:
     path = Path(value)
     if path.is_absolute() or ".." in path.parts or not value or value.startswith("-") or value == "." or re.search(r"[*?\[]", value):
@@ -935,7 +942,8 @@ def inspect_task_inventory(record: dict[str, Any], record_path: Path, raw_path: 
         if not isinstance(owner_id, str):
             raise HelperError("Registry owner task is invalid")
         expected_ids.append(owner_id)
-    expected_ids.extend(str(item["id"]) for item in record.get("observer_tasks", []))
+    if record["schema_version"] == LEGACY_SCHEMA_VERSION:
+        expected_ids.extend(str(item["id"]) for item in record["observer_tasks"])
     if len(actual_ids) != len(set(actual_ids)):
         raise HelperError("Task inventory contains duplicate IDs")
     return {
@@ -951,7 +959,8 @@ def inspect_task_inventory(record: dict[str, Any], record_path: Path, raw_path: 
 def load_task_inventory(record: dict[str, Any], record_path: Path, raw_path: str) -> dict[str, Any]:
     inventory = inspect_task_inventory(record, record_path, raw_path)
     if inventory["actual_ids"] != inventory["expected_ids"]:
-        raise HelperError("Actual task inventory does not match owner and observers")
+        expected = "owner and legacy observer tasks" if record["schema_version"] == LEGACY_SCHEMA_VERSION else "owner task"
+        raise HelperError(f"Actual task inventory does not match the {expected}")
     for task in inventory["tasks"]:
         if task["status"] not in {"idle", "notLoaded"}:
             raise HelperError(f"Task is not cleanup-safe: {task['id']}={task['status']}")
@@ -1239,11 +1248,6 @@ def build_parser() -> argparse.ArgumentParser:
     item = repo_issue("record-permission", command_record_permission)
     item.add_argument("--operation", required=True)
     item.add_argument("--evidence-sha256", required=True)
-
-    item = repo_issue("observer-add", command_observer_add)
-    item.add_argument("--operation", required=True)
-    item.add_argument("--task-id", required=True)
-    item.add_argument("--status", required=True)
 
     item = repo_issue("set-scope", command_set_scope)
     item.add_argument("--operation", required=True)

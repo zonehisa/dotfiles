@@ -42,10 +42,12 @@ chmod +x setup.sh
 
 `init` は `LINKS` に定義された対象だけを `~/` からこの repo へコピーします。既に repo 側にあるファイルは上書きしません。
 
-Codex Skillsは次へリンクされます。
+Codexの設定とSkillsは次へリンクされます。
 
 - `codex/skills/parallel-worktree` → `~/.agents/skills/parallel-worktree`
 - `codex/skills/git-workflow` → `~/.codex/skills/git-workflow`
+- `codex/agents/git-operator-luna.toml` → `~/.codex/agents/git-operator-luna.toml`
+- `codex/agents/reviewer-luna.toml` → `~/.codex/agents/reviewer-luna.toml`
 
 実行時registry、lock、evidenceは`${CODEX_HOME:-$HOME/.codex}/parallel-worktree`、Worktreeはadapterごとの管理領域に保持され、dotfilesでは管理しません。
 

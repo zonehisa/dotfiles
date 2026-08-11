@@ -33,4 +33,6 @@ Pin/unpin, retention-limit reads, and deletion-schedule queries are optional. Re
 
 ## Task Inventory
 
-At status and cleanup, list every task whose exact cwd equals the registered worktree realpath. Compare with owner plus non-archived observers. Extra tasks cause `drifted`; missing tasks cause `orphaned`.
+At status and cleanup, list every task whose exact cwd equals the registered worktree realpath. The only expected desktop task is the registered owner; completion-review subagents are not inventory entries. Extra tasks cause `drifted`; a missing owner causes `orphaned`.
+
+New v2 registries require an empty `observer_tasks` compatibility field. For legacy schema-v1 recovery, also report the already-registered observer desktop tasks until cleanup; no adapter may create or register a new observer.

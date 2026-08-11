@@ -38,7 +38,7 @@ Use `scripts/pw-helper` for deterministic registry, lock, fingerprint, ownership
 
 - R0-R1 Plan: Sol `medium`; R2 Plan: Sol `high`; R3-R4 Plan: Sol `xhigh`.
 - Implementation/TDD: Terra `medium`.
-- Independent review: use the existing `git-workflow` R0-R4 review mapping.
+- Completion review: use the existing `git-workflow` R0-R4 review mapping.
 - Within this lifecycle, `git-workflow` must request Git mutations through `pw-helper`; only the owner task may edit files or address review findings.
 
 ## Version Policy

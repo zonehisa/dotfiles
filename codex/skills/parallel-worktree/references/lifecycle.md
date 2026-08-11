@@ -65,7 +65,9 @@ Any mismatch transitions to `drifted` without creating the branch.
 
 ## Status And Resume
 
-`status` is read-only. Reconcile registry, Git worktrees, branch, HEAD, owner, observers, cwd task inventory, PR, lease, resources, pin/retention, and archive contract.
+`status` is read-only. Reconcile registry, Git worktrees, branch, HEAD, owner, cwd task inventory, PR, lease, resources, pin/retention, and archive contract. Completion-review subagents are not desktop tasks and are never added to the registry inventory.
+
+Legacy v1 registries remain readable for status, resume, and cleanup recovery. Their already-registered observer desktop tasks remain in inventory only until that lifecycle is safely cleaned up; the removed writer cannot add or recreate observers. New registries use schema v2 with an empty compatibility field.
 
 - Extra task at the child cwd: `drifted`.
 - Missing expected task or worktree: `orphaned`.
@@ -76,8 +78,9 @@ Any mismatch transitions to `drifted` without creating the branch.
 
 ## Risk Routing
 
-| Risk | Plan | Implementation/TDD | Review |
+| Risk | Plan | Implementation/TDD | Completion review |
 |---|---|---|---|
-| R0-R1 | Sol medium | Terra medium | Existing R0-R1 policy |
-| R2 | Sol high | Terra medium | Existing R2 policy |
-| R3-R4 | Sol xhigh | Terra medium | Existing R3-R4 policy |
+| R0 | Sol medium | Terra medium | Skip |
+| R1 | Sol medium | Terra medium | Fresh-context `reviewer_luna`: Luna `max`, read-only |
+| R2 | Sol high | Terra medium | Fresh-context `reviewer_luna`: Luna `max`, read-only |
+| R3-R4 | Sol xhigh | Terra medium | Fresh-context `reviewer_luna`: Luna `max`, read-only |

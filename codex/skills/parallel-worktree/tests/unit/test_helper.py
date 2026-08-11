@@ -252,7 +252,7 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(shown["state"], "drifted")
         self.assertEqual(shown["resume_state"], "provisioning")
 
-    def test_owner_observer_scope_and_lease_are_guarded_by_operation(self) -> None:
+    def test_owner_scope_and_lease_are_guarded_and_legacy_observers_are_rejected(self) -> None:
         record = self.helper_json(
             "prepare-start", "--repo", str(self.repo), "--issue", "125",
             "--risk", "R3", "--planned-branch", "fix/125-example",
@@ -268,11 +268,14 @@ class HelperTest(unittest.TestCase):
             "--operation", operation, "--evidence-sha256", "b" * 64,
         )
         self.assertEqual(permission["permission_state"], "verified")
-        observer = self.helper_json(
+        self.assertEqual(owner["observer_tasks"], [])
+        observer = run(
             "observer-add", "--repo", str(self.repo), "--issue", "125",
             "--operation", operation, "--task-id", "task-review-125", "--status", "notLoaded",
+            env=self.env, check=False,
         )
-        self.assertEqual(observer["observer_tasks"][0]["access"], "read_only")
+        self.assertNotEqual(observer.returncode, 0)
+        self.assertIn("invalid choice", observer.stderr)
         scoped = self.helper_json(
             "set-scope", "--repo", str(self.repo), "--issue", "125",
             "--operation", operation, "--allow", "app", "--allow", "tests", "--forbid", ".env",
@@ -291,6 +294,56 @@ class HelperTest(unittest.TestCase):
         )
         self.assertNotEqual(wrong.returncode, 0)
         self.assertIn("Operation ID", wrong.stderr)
+
+    def test_v1_legacy_observer_registry_remains_recoverable(self) -> None:
+        record = self.helper_json(
+            "prepare-start", "--repo", str(self.repo), "--issue", "141",
+            "--risk", "R2", "--planned-branch", "fix/141-legacy-recovery",
+        )
+        self.assertEqual(record["schema_version"], 2)
+        operation = record["operation_id"]
+        record = self.helper_json(
+            "record-owner", "--repo", str(self.repo), "--issue", "141",
+            "--operation", operation, "--owner-task-id", "task-owner-141",
+        )
+        registry = self.codex_home / "parallel-worktree" / record["repository_id"] / "issue-141.json"
+        legacy = json.loads(registry.read_text())
+        legacy["schema_version"] = 1
+        legacy["observer_tasks"] = [{
+            "id": "task-review-141",
+            "role": "independent_reviewer",
+            "access": "read_only",
+            "status": "notLoaded",
+        }]
+        registry.write_text(json.dumps(legacy))
+        registry.chmod(0o600)
+
+        shown = self.helper_json("show", "--repo", str(self.repo), "--issue", "141")
+        self.assertEqual(shown["schema_version"], 1)
+        self.assertEqual(shown["observer_tasks"][0]["id"], "task-review-141")
+
+        evidence_dir = registry.parent / "evidence"
+        evidence_dir.mkdir(mode=0o700)
+        evidence = evidence_dir / "legacy-tasks.json"
+        evidence.write_text(json.dumps({
+            "cwd": shown["worktree_path"],
+            "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "source": "legacy-recovery-test",
+            "tasks": [
+                {"id": "task-owner-141", "status": "idle"},
+                {"id": "task-review-141", "status": "notLoaded"},
+            ],
+        }))
+        evidence.chmod(0o600)
+        recovered = self.helper_json(
+            "record-task-inventory", "--repo", str(self.repo), "--issue", "141",
+            "--operation", operation, "--evidence-file", str(evidence),
+        )
+        self.assertEqual(recovered["schema_version"], 1)
+        self.assertEqual(
+            [item["id"] for item in recovered["task_inventory"]["tasks"]],
+            ["task-owner-141", "task-review-141"],
+        )
 
     def test_state_machine_rejects_cleanup_jump_and_allows_error_resume(self) -> None:
         record = self.helper_json(

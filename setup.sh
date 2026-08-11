@@ -31,6 +31,8 @@ LINKS=(
   "raycast-scripts:raycast-scripts"
   ".agents/skills/parallel-worktree:codex/skills/parallel-worktree"
   ".codex/AGENTS.md:codex/AGENTS.md"
+  ".codex/agents/git-operator-luna.toml:codex/agents/git-operator-luna.toml"
+  ".codex/agents/reviewer-luna.toml:codex/agents/reviewer-luna.toml"
   ".codex/skills/git-workflow:codex/skills/git-workflow"
 )
 

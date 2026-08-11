@@ -4,8 +4,8 @@
 
 Read only. Require:
 
-- Actual tasks at the child cwd exactly equal registered owner plus non-archived observers.
-- Owner and every observer have no active turn.
+- The only task at the child cwd is the registered owner. Completion-review subagents are not desktop tasks and are not part of this inventory.
+- The owner has no active turn.
 - Allowed states: `idle`, `notLoaded`.
 - Refused states: `active`, `active` with `waitingOnApproval`, `systemError`, unavailable, or unknown.
 - Child has no tracked or untracked changes.
@@ -22,7 +22,9 @@ After approval, acquire Issue lock then repository lock. Re-read task inventory/
 
 Write the approved candidate ID to a private 0600 approval file and run `pw-helper cleanup-authorize` with a newly generated task-inventory evidence file. The helper re-queries GitHub, reloads the exact-cwd task inventory, and recomputes the candidate under lock. It permits worktree removal for only two minutes; stale cleanup requires both phases again.
 
-If supported, unpin every registered task. Archive/detach observers according to the adapter, then archive the owner last.
+If supported, unpin the registered owner task before archiving it.
+
+For legacy schema-v1 recovery only, include every already-registered observer desktop task in the exact-cwd inventory, require it to be cleanup-safe, and archive/detach those observers before the owner. Never create, replace, or re-register a legacy observer. New schema-v2 lifecycles have no observer desktop tasks.
 
 ## Codex-Managed
 
@@ -44,7 +46,7 @@ For `unverified` or `unsupported`, instruct the user to archive through the desk
 2. Ask the helper to remove the exact registered worktree without force.
 3. Confirm disappearance from the worktree list.
 4. Ask the helper to try `git branch -d`.
-5. Archive/detach the registered tasks and generate a final exact-cwd task inventory.
+5. Archive/detach the registered owner task and generate a final exact-cwd task inventory.
 6. Run `pw-helper cleanup-finalize`; only this command may transition to `archived` after confirming the worktree is gone, branch cleanup was attempted, and no task remains at that cwd.
 
 Never use `-D`, delete the remote branch, or run `git worktree prune`. `prune --dry-run` may be reported separately.

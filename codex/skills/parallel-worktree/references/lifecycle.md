@@ -67,7 +67,9 @@ Any mismatch transitions to `drifted` without creating the branch.
 
 `status` is read-only. Reconcile registry, Git worktrees, branch, HEAD, owner, cwd task inventory, PR, lease, resources, pin/retention, and archive contract. Completion-review subagents are not desktop tasks and are never added to the registry inventory.
 
-Legacy v1 registries remain readable for status, resume, and cleanup recovery. Their already-registered observer desktop tasks remain in inventory only until that lifecycle is safely cleaned up; the removed writer cannot add or recreate observers. New registries use schema v2 with an empty compatibility field.
+ownerless cleanup is orphaned and read-only: status/resume may expose the registry for recovery, but cleanup preparation, authorization, removal, and finalization require a registered owner task.
+
+Legacy v1 registries remain readable for status, resume, and cleanup recovery. Schema v1 is owner plus exactly the already-registered observer desktop tasks, and every expected task must be cleanup-safe before cleanup can proceed; the removed writer cannot add or recreate observers. Schema v2 is owner-only, uses an empty compatibility field, and has no observer desktop tasks.
 
 - Extra task at the child cwd: `drifted`.
 - Missing expected task or worktree: `orphaned`.

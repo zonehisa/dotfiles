@@ -275,8 +275,10 @@ def validate_registry(data: dict[str, Any]) -> None:
         raise HelperError(f"Registry missing fields: {', '.join(missing)}")
     validate_issue(data["issue"])
     schema_version = data["schema_version"]
-    if schema_version not in {LEGACY_SCHEMA_VERSION, SCHEMA_VERSION}:
+    if type(schema_version) is not int or schema_version not in {LEGACY_SCHEMA_VERSION, SCHEMA_VERSION}:
         raise HelperError("Unsupported registry schema")
+    if schema_version == SCHEMA_VERSION and data["owner_task_id"] is not None:
+        validate_task_id(data["owner_task_id"])
     if data["state"] not in ALL_STATES:
         raise HelperError("Invalid state")
     if data["risk"] not in RISKS:
@@ -291,16 +293,12 @@ def validate_registry(data: dict[str, Any]) -> None:
         for observer in observers:
             if not isinstance(observer, dict) or set(observer) != {"id", "role", "access", "status"}:
                 raise HelperError("Legacy observer task has invalid fields")
-            task_id = observer["id"]
-            if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", task_id):
-                raise HelperError("Legacy observer task has an invalid ID")
+            task_id = validate_legacy_task_value(observer["id"], "Legacy observer task has an invalid ID")
             if task_id == data["owner_task_id"] or task_id in seen_observers:
                 raise HelperError("Legacy observer task ownership is ambiguous")
             if observer["role"] != "independent_reviewer" or observer["access"] != "read_only":
                 raise HelperError("Legacy observer task role/access is invalid")
-            status_value = observer["status"]
-            if not isinstance(status_value, str) or not status_value or len(status_value) > 64:
-                raise HelperError("Legacy observer task status is invalid")
+            validate_legacy_task_value(observer["status"], "Legacy observer task status is invalid")
             seen_observers.add(task_id)
     pair = (data["management_mode"], data["adapter_kind"])
     allowed = {
@@ -711,8 +709,23 @@ def command_status(args: argparse.Namespace) -> dict[str, Any]:
         }
 
 
+def validate_legacy_task_value(value: Any, message: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise HelperError(message)
+    return value
+
+
+def require_cleanup_owner(record: dict[str, Any]) -> str:
+    owner_task_id = record.get("owner_task_id")
+    if not isinstance(owner_task_id, str) or not owner_task_id:
+        raise HelperError("Cleanup operations require a registered owner task")
+    if record["schema_version"] == SCHEMA_VERSION:
+        validate_task_id(owner_task_id)
+    return owner_task_id
+
+
 def validate_task_id(value: str) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", value):
         raise HelperError("Invalid task ID")
     return value
 
@@ -929,10 +942,20 @@ def inspect_task_inventory(record: dict[str, Any], record_path: Path, raw_path: 
         raise HelperError("Task inventory must contain a task list")
     actual_ids: list[str] = []
     normalized: list[dict[str, str]] = []
+    legacy_observer_ids = {
+        validate_legacy_task_value(item["id"], "Legacy observer task has an invalid ID")
+        for item in record["observer_tasks"]
+    } if record["schema_version"] == LEGACY_SCHEMA_VERSION else set()
     for task in actual:
-        task_id = validate_task_id(task.get("id", ""))
+        raw_task_id = task.get("id", "")
+        if isinstance(raw_task_id, str) and raw_task_id in legacy_observer_ids:
+            task_id = validate_legacy_task_value(raw_task_id, "Task has an invalid ID")
+        else:
+            task_id = validate_task_id(raw_task_id)
         status_value = task.get("status")
-        if not isinstance(status_value, str) or not status_value or len(status_value) > 64:
+        if task_id in legacy_observer_ids:
+            status_value = validate_legacy_task_value(status_value, f"Task has an invalid status: {task_id}")
+        elif not isinstance(status_value, str) or not status_value or len(status_value) > 64:
             raise HelperError(f"Task has an invalid status: {task_id}")
         actual_ids.append(task_id)
         normalized.append({"id": task_id, "status": status_value})
@@ -981,6 +1004,7 @@ def command_record_task_inventory(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def git_cleanup_snapshot(record: dict[str, Any]) -> dict[str, Any]:
+    require_cleanup_owner(record)
     child = safe_child_path(record)
     if child not in worktree_paths(Path(record["repository"])):
         raise HelperError("Registered worktree does not exist")
@@ -1029,6 +1053,7 @@ def command_cleanup_prepare(args: argparse.Namespace) -> dict[str, Any]:
         require_operation(record, args.operation)
         if record["state"] != "merged":
             raise HelperError("cleanup-prepare requires state=merged")
+        require_cleanup_owner(record)
         record["task_inventory"] = load_task_inventory(record, path, args.task_evidence_file)
         snapshot = git_cleanup_snapshot(record)
         candidate = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
@@ -1045,6 +1070,7 @@ def command_cleanup_authorize(args: argparse.Namespace) -> dict[str, Any]:
         require_operation(record, args.operation)
         if record["state"] != "cleanup_ready":
             raise HelperError("cleanup-authorize requires state=cleanup_ready")
+        require_cleanup_owner(record)
         candidate = record.get("cleanup_candidate") or {}
         expires_at = candidate.get("expires_at")
         if not isinstance(expires_at, str):
@@ -1167,6 +1193,7 @@ def command_branch_delete(args: argparse.Namespace) -> dict[str, Any]:
         branch = record.get("actual_branch")
         if not branch or record["state"] != "cleanup_pending":
             raise HelperError("branch-delete requires cleanup_pending with actual branch")
+        require_cleanup_owner(record)
         if safe_child_path(record) in worktree_paths(Path(record["repository"])):
             raise HelperError("Worktree still exists")
         result = run_git(Path(record["repository"]), "branch", "-d", branch, check=False)
@@ -1183,6 +1210,7 @@ def command_cleanup_finalize(args: argparse.Namespace) -> dict[str, Any]:
         require_operation(record, args.operation)
         if record["state"] != "cleanup_pending":
             raise HelperError("cleanup-finalize requires state=cleanup_pending")
+        require_cleanup_owner(record)
         child = safe_child_path(record)
         if child.exists() or child in worktree_paths(Path(record["repository"])):
             raise HelperError("Worktree still exists")

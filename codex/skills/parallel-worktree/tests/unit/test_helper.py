@@ -69,6 +69,25 @@ class HelperTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("positive decimal", result.stderr)
 
+    def test_schema_version_requires_integer_one_or_two(self) -> None:
+        record = self.helper_json(
+            "prepare-start", "--repo", str(self.repo), "--issue", "143",
+            "--risk", "R1", "--planned-branch", "fix/143-schema-type",
+        )
+        registry = self.codex_home / "parallel-worktree" / record["repository_id"] / "issue-143.json"
+        for invalid in (True, 1.0, [], {}):
+            malformed = dict(record)
+            malformed["schema_version"] = invalid
+            registry.write_text(json.dumps(malformed))
+            registry.chmod(0o600)
+            rejected = run(
+                "show", "--repo", str(self.repo), "--issue", "143",
+                env=self.env, check=False,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("Unsupported registry schema", rejected.stderr)
+            self.assertNotIn("Traceback", rejected.stderr)
+
     def test_prepare_reserves_distinct_ports_and_rejects_existing_branch(self) -> None:
         first = self.helper_json(
             "prepare-start", "--repo", str(self.repo), "--issue", "127",
@@ -309,18 +328,21 @@ class HelperTest(unittest.TestCase):
         registry = self.codex_home / "parallel-worktree" / record["repository_id"] / "issue-141.json"
         legacy = json.loads(registry.read_text())
         legacy["schema_version"] = 1
+        legacy_observer_id = "Legacy observer/v1"
+        legacy_observer_status = "legacy-status-" + ("x" * 80)
         legacy["observer_tasks"] = [{
-            "id": "task-review-141",
+            "id": legacy_observer_id,
             "role": "independent_reviewer",
             "access": "read_only",
-            "status": "notLoaded",
+            "status": legacy_observer_status,
         }]
         registry.write_text(json.dumps(legacy))
         registry.chmod(0o600)
 
         shown = self.helper_json("show", "--repo", str(self.repo), "--issue", "141")
         self.assertEqual(shown["schema_version"], 1)
-        self.assertEqual(shown["observer_tasks"][0]["id"], "task-review-141")
+        self.assertEqual(shown["observer_tasks"][0]["id"], legacy_observer_id)
+        self.assertEqual(shown["observer_tasks"][0]["status"], legacy_observer_status)
 
         evidence_dir = registry.parent / "evidence"
         evidence_dir.mkdir(mode=0o700)
@@ -331,7 +353,7 @@ class HelperTest(unittest.TestCase):
             "source": "legacy-recovery-test",
             "tasks": [
                 {"id": "task-owner-141", "status": "idle"},
-                {"id": "task-review-141", "status": "notLoaded"},
+                {"id": legacy_observer_id, "status": "notLoaded"},
             ],
         }))
         evidence.chmod(0o600)
@@ -342,8 +364,38 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(recovered["schema_version"], 1)
         self.assertEqual(
             [item["id"] for item in recovered["task_inventory"]["tasks"]],
-            ["task-owner-141", "task-review-141"],
+            [legacy_observer_id, "task-owner-141"],
         )
+
+    def test_cleanup_rejects_ownerless_or_invalid_owner_registry(self) -> None:
+        cases = ((144, 1, None, "legacy observer/144"), (145, 2, "bad owner", None))
+        for issue, schema_version, owner_task_id, observer_id in cases:
+            record = self.helper_json(
+                "prepare-start", "--repo", str(self.repo), "--issue", str(issue),
+                "--risk", "R1", "--planned-branch", f"fix/{issue}-owner-check",
+            )
+            operation = record["operation_id"]
+            registry = self.codex_home / "parallel-worktree" / record["repository_id"] / f"issue-{issue}.json"
+            malformed = json.loads(registry.read_text())
+            malformed["schema_version"] = schema_version
+            malformed["owner_task_id"] = owner_task_id
+            malformed["state"] = "merged"
+            malformed["observer_tasks"] = ([{
+                "id": observer_id,
+                "role": "independent_reviewer",
+                "access": "read_only",
+                "status": "idle",
+            }] if observer_id else [])
+            registry.write_text(json.dumps(malformed))
+            registry.chmod(0o600)
+            rejected = run(
+                "cleanup-prepare", "--repo", str(self.repo), "--issue", str(issue),
+                "--operation", operation, "--task-evidence-file", str(registry.parent / "missing.json"),
+                env=self.env, check=False,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertRegex(rejected.stderr.lower(), r"owner|invalid task id")
+            self.assertNotIn("Traceback", rejected.stderr)
 
     def test_state_machine_rejects_cleanup_jump_and_allows_error_resume(self) -> None:
         record = self.helper_json(
@@ -566,6 +618,12 @@ class HelperTest(unittest.TestCase):
             "--operation", operation, "--candidate", candidate,
             "--approval-file", str(approval), "--task-evidence-file", str(evidence),
         )
+        authorized_record = self.helper_json("show", "--repo", str(self.repo), "--issue", "133")
+        self.assertEqual(authorized_record["state"], "cleanup_pending")
+        self.assertEqual(
+            [item["id"] for item in authorized_record["task_inventory"]["tasks"]],
+            ["owner-133"],
+        )
         registry = registry_dir / "issue-133.json"
         expired = json.loads(registry.read_text())
         expired["lease_expires_at"] = "2000-01-01T00:00:00Z"
@@ -630,6 +688,11 @@ class HelperTest(unittest.TestCase):
             "branch-delete", "--repo", str(self.repo), "--issue", "133", "--operation", operation,
         )
         self.assertTrue(deleted["deleted"])
+        retained_owner = self.helper_json("show", "--repo", str(self.repo), "--issue", "133")
+        self.assertEqual(
+            [item["id"] for item in retained_owner["task_inventory"]["tasks"]],
+            ["owner-133"],
+        )
         evidence.write_text(json.dumps({
             "cwd": created["worktree_path"],
             "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),

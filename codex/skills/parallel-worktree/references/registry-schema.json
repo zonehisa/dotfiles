@@ -35,7 +35,7 @@
     "planned_branch": {"type": "string", "minLength": 1},
     "actual_branch": {"type": ["string", "null"]},
     "worktree_path": {"type": ["string", "null"]},
-    "owner_task_id": {"type": ["string", "null"]},
+    "owner_task_id": {"type": ["string", "null"], "description": "Null is allowed only before owner registration; cleanup operations require a non-null owner_task_id (schema v2 IDs remain strict)."},
     "desktop_task_id": {"type": ["string", "null"]},
     "worktree_id": {"type": ["string", "null"]},
     "observer_tasks": {

@@ -29,6 +29,8 @@
 
 Git workflow operator: agent_id per repository/Issue-or-branch lifecycle. R1〜R4のcompletion reviewを除く`ic`、`is`、`cm`、`pr`、`prr`、`prf`、`cleanup`は、`fork_turns = "none"`の`git_operator_luna`へ委譲し、GPT-5.6 Luna `max`、workspace-writeを固定する。同じworkflowの承認後follow-upは同じagentへ送る。
 
+If the current agent is already running as `git_operator_luna`, execute the assigned operation directly; never recursively delegate or spawn another `git_operator_luna` operator.
+
 Coordinatorはユーザー対話と権限判断を保持し、repository、Issue/branch/base、要求operation、現在state、明示された権限だけをcontext packetで渡す。packetにない外部write権限をoperatorへ推測させず、operator自身のcompletion diffをreviewさせない。completion gateは別のfresh-context `reviewer_luna`を使う。
 
 `git_operator_luna`を作成・確認できない場合はworkflowを止め、Coordinatorや別modelへfallbackしない。既存の`parallel-worktree` lifecycleで別taskがownerの場合は、そのownerを偽装せず、必要な`pw-helper` operationをCoordinatorへ返す。
@@ -53,7 +55,9 @@ Coordinatorはユーザー対話と権限判断を保持し、repository、Issue
 
 Subagent review: agent_id per review_lifecycle_key. Same review_round_key+review_context_key: no duplicate sends. Collect canonical result. 有効なreview後の変更は同じagentへ`Round N`として送る。
 
-全差分を確認できない状態またはfingerprint不一致のreviewは無効とし、差分を再固定して新しいfresh-contextの`reviewer_luna`でやり直す。P0〜P2やrisk再分類ではrouteを変えず、修正後の全差分を同じagentへ再提出する。subagentを作成・確認できない場合は完了扱いを止め、別taskや別modelへfallbackしない。
+Round 1 packet is the complete frozen scope. Round 2 and an explicitly authorized Round 3 packets remain bounded: prior findings or unresolved Round 2 findings, the fix delta, directly affected paths, the new full-scope fingerprint, and existing successful test evidence only.
+
+全差分を確認できない状態またはfingerprint不一致のreviewは無効とし、差分を再固定して新しいfresh-contextの`reviewer_luna`でやり直す。P0〜P2やrisk再分類ではrouteを変えず、Round 2は直前finding、修正差分、直接影響先、全差分fingerprint、成功済み証跡だけを同じagentへ再提出する。Round 3はユーザーの明示承認後だけ実行し、その結果で配送を停止する。subagentを作成・確認できない場合は完了扱いを止め、別taskや別modelへfallbackしない。
 
 Review状態は次の通り扱う。
 
@@ -62,6 +66,15 @@ Review状態は次の通り扱う。
 - `pending` / `stale`: commit、push、PR作成を停止する。
 
 P0-P2、採用P3またはその他の変更は差分を再固定し、現在の正本reviewerへ再提出する。Fingerprint不一致は`stale`だが、base移動前後の`patch_base_tree`と`patch_hash`が一致し、受け入れ条件・risk・対象fileが不変なら両fingerprintを残して継承できる。R0変更も表示し、人の軽微確認なしに通過させない。
+
+### Bounded review rounds
+
+- These rules apply only to review lifecycles created after this policy; do not rewrite an existing lifecycle.
+- Round 1 is a full review of the complete frozen diff. Round 2 receives only prior findings, the fix delta, directly affected paths, the new fingerprint, and existing successful test evidence.
+- An explicitly authorized Round 3 remains bounded to unresolved Round 2 findings, the fix delta, directly affected paths, the new full-scope fingerprint, and existing successful test evidence.
+- Review normally stops after two rounds. Round 3 requires explicit user approval; stop delivery after Round 3. If P0-P2 remain, do not automatically create a new lifecycle.
+- Do not rerun successful implementation-side tests or reread unchanged specifications, prior conversation, or prior tool output in Round 2. Use the existing `review_fingerprint.py` as the sole review evidence mechanism.
+- P0-P2 block commit and PR creation.
 
 Reviewerはprogressなしのfinal-only短報とし、Coordinatorは完了通知を1回待つ。定期的なbusy pollをしない。findingがあればseverityとfile/line根拠を含め、なければ件数、fingerprint、残余risk、未検証範囲だけを返す。
 

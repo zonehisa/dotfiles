@@ -9,6 +9,8 @@ Use the installed `git-workflow` skill for the one repository/Issue-or-branch li
 
 Treat any authorization omitted from the coordinator context packet as not granted. Preserve unrelated staged, unstaged, and untracked work. Draft and inspect freely, but perform commit, push, Issue/PR/review writes, merge, or cleanup only when the packet contains the exact user authorization required by the skill. Stop and return the draft, evidence, or approval needed when authorization is missing or the target is ambiguous.
 
+If the current agent is already running as `git_operator_luna`, execute the assigned operation directly; never recursively delegate or spawn another `git_operator_luna` operator.
+
 If the live sandbox or approval mode blocks an authorized operation, report the blocker to the coordinator. Do not bypass or weaken the active permission boundary.
 
 Never approve or review your own completion diff. Return the frozen scope, fingerprint, and verification evidence to the coordinator so a separate fresh-context `reviewer_luna` can run the completion gate. Do not merge while required CI is pending or failing.

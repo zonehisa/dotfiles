@@ -12,7 +12,7 @@
     "observer_tasks", "risk", "created_at", "updated_at"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"enum": [1, 2]},
     "repository_id": {"type": "string", "pattern": "^[0-9a-f]{20}$"},
     "repository": {"type": "string", "minLength": 1},
     "remote": {"type": "string", "minLength": 1},
@@ -35,22 +35,12 @@
     "planned_branch": {"type": "string", "minLength": 1},
     "actual_branch": {"type": ["string", "null"]},
     "worktree_path": {"type": ["string", "null"]},
-    "owner_task_id": {"type": ["string", "null"]},
+    "owner_task_id": {"type": ["string", "null"], "description": "Null is allowed only before owner registration; cleanup operations require a non-null owner_task_id (schema v2 IDs remain strict)."},
     "desktop_task_id": {"type": ["string", "null"]},
     "worktree_id": {"type": ["string", "null"]},
     "observer_tasks": {
       "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id", "role", "access", "status"],
-        "properties": {
-          "id": {"type": "string", "minLength": 1},
-          "role": {"const": "independent_reviewer"},
-          "access": {"const": "read_only"},
-          "status": {"type": "string", "minLength": 1}
-        },
-        "additionalProperties": false
-      }
+      "description": "Schema v2 requires this compatibility field to be empty. Schema v1 entries are read only for recovery of existing desktop review tasks."
     },
     "risk": {"enum": ["R0", "R1", "R2", "R3", "R4"]},
     "resource_namespace": {
@@ -113,6 +103,30 @@
     "updated_at": {"type": "string", "format": "date-time"}
   },
   "allOf": [
+    {
+      "if": {"properties": {"schema_version": {"const": 2}}},
+      "then": {"properties": {"observer_tasks": {"maxItems": 0}}}
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": 1}}},
+      "then": {
+        "properties": {
+          "observer_tasks": {
+            "items": {
+              "type": "object",
+              "required": ["id", "role", "access", "status"],
+              "properties": {
+                "id": {"type": "string", "minLength": 1},
+                "role": {"const": "independent_reviewer"},
+                "access": {"const": "read_only"},
+                "status": {"type": "string", "minLength": 1}
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      }
+    },
     {
       "if": {"properties": {"management_mode": {"const": "skill_managed"}}},
       "then": {"properties": {"adapter_kind": {"const": "git_worktree_app_server"}, "archive_delete_contract": {"const": "unsupported"}}}

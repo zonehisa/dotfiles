@@ -17,9 +17,11 @@ Handle Git and GitHub work using repository conventions discovered at runtime.
 - Read repository `AGENTS.md`, `README.md`, contributing docs, and relevant local skills before acting.
 - Detect the repository, default branch, conventions, labels, test commands, and current state instead of hardcoding them.
 - Stop and ask one narrow question only when the next action could damage user work, publish externally, or target the wrong Issue/PR.
-- Delegate every `git-workflow` operation except the R1-R4 completion gate to one `git_operator_luna` subagent per repository/Issue-or-branch lifecycle. Spawn it with `fork_turns = "none"` and a minimal context packet containing the requested operation, repository, Issue/branch/base, current state, and exact user authorization; reuse the same saved operator agent for later approvals and follow-ups.
+- Delegate Git/GitHub discovery, target resolution, command preparation, and non-approval-bound execution (except the R1-R4 completion gate) to one `git_operator_luna` subagent per repository/Issue-or-branch lifecycle. Spawn it with `fork_turns = "none"` and a minimal context packet containing the requested operation, repository, Issue/branch/base, current state, and authorization scope; reuse the same saved operator agent for later approvals and follow-ups.
 - If the current agent is already running as `git_operator_luna`, execute the assigned operation directly; never recursively delegate or spawn another `git_operator_luna` operator.
-- Keep user communication and authorization decisions in the coordinator. Treat permissions omitted from the operator context packet as not granted. If the operator is unavailable, stop the workflow instead of executing it in the coordinator or another model.
+- Keep user communication and authorization decisions in the coordinator. Treat permissions omitted from the operator context packet as not granted.
+- When a mutating command needs runtime escalation tied to explicit user authorization, the operator must stop before requesting escalation and return the exact command, resolved targets, expected effects, and verification steps. After checking that this matches the user's direct authorization, the coordinator executes that exact approval-bound command so the approval layer receives the original user message. Do not relay quoted approval text to an isolated operator or ask it to request escalation; relayed agent text is not trusted user authorization.
+- The coordinator must not broaden, rewrite, or improvise the returned mutation. If the exact command is unsafe, stale, incomplete, or exceeds authorization, send it back to the saved operator for correction. If the operator itself is unavailable, stop the workflow instead of substituting another model.
 - Never let `git_operator_luna` approve or review its own completion diff. Use a separate fresh-context `reviewer_luna` agent for the completion gate and keep its evidence distinct from the operator lifecycle.
 - Keep the configured global default unless the user changes it. For Issue work, Git/GitHub operations, and completion review, follow the phase and risk-based model routing in the selected reference.
 - Use the scoped `reviewer_luna` subagent for every R1-R4 completion gate, with no inherited implementation turns. Do not use `reviewer_luna` for operator work.
@@ -34,6 +36,10 @@ Read only the reference required for the current operation. Do not preload the o
 - Start Issue work, create its branch, plan it, or `is`: read [references/issue-start.md](references/issue-start.md).
 - Commit, prepare/create a PR, or run the risk-routed completion gate (`cm`, `pr`, explicit review, or completion): read [references/delivery.md](references/delivery.md).
 - Review a PR/local diff or address review feedback (`prr`, `prf`): read [references/code-review.md](references/code-review.md).
+
+For user-visible UI delivery, also apply the PR Evidence Lifecycle in
+[references/delivery.md](references/delivery.md). Keep evidence review separate from completion
+diff review and do not upload through an API or `gh`.
 
 When a request spans operations, read the references in execution order, loading each only when that operation begins. For example, `is` followed later by `cm` starts with `issue-start.md` and defers `delivery.md` until commit is requested.
 

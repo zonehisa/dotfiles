@@ -82,7 +82,7 @@ Legacy v1 registries remain readable for status, resume, and cleanup recovery. S
 
 | Risk | Plan | Implementation/TDD | Completion review |
 |---|---|---|---|
-| R0 | Sol medium | Terra medium | Skip |
-| R1 | Sol medium | Terra medium | Fresh-context `reviewer_luna`: Luna `max`, read-only |
-| R2 | Sol high | Terra medium | Fresh-context `reviewer_luna`: Luna `max`, read-only |
-| R3-R4 | Sol xhigh | Terra medium | Fresh-context `reviewer_luna`: Luna `max`, read-only |
+| R0 | Sol medium | `implementer_luna`: GPT-5.6 Luna `max`, workspace-write | Skip |
+| R1 | Sol medium | `implementer_luna`: GPT-5.6 Luna `max`, workspace-write | Fresh-context `reviewer_luna`: Luna `max`, read-only |
+| R2 | Sol high | `implementer_luna`: GPT-5.6 Luna `max`, workspace-write | Fresh-context `reviewer_luna`: Luna `max`, read-only |
+| R3-R4 | Sol xhigh | `implementer_luna`: GPT-5.6 Luna `max`, workspace-write | Fresh-context `reviewer_luna`: Luna `max`, read-only |

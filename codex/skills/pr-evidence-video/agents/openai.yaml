@@ -1,0 +1,4 @@
+interface:
+  display_name: "PR Evidence Video"
+  short_description: "PR向けの安全な動作証跡動画をRemotionで生成"
+  default_prompt: "Use $pr-evidence-video to render a privacy-reviewed PR evidence video from local browser recordings."

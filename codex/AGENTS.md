@@ -3,7 +3,7 @@
 ## Risk-Routed Diff Review Gate
 
 - typo、文言、コメント、明白な整形だけのR0を除き、コード変更やPR準備を完了扱いにする前に未コミット差分全体をレビューする。混在差分は最高riskを使い、UIでもイベント、binding、条件、navigation、data accessを含めばR2以上とする。
-- `git-workflow`のcompletion review以外は`git_operator_luna`サブエージェントを使う。`fork_turns = "none"`、GPT-5.6 Luna `max`、workspace-writeとし、repository、Issue/branch/base、要求operation、現在state、ユーザーが与えた正確な権限だけをcontext packetで渡す。同じworkflow lifecycleの承認後follow-upは保存したagent IDへ送る。
+- `git-workflow`のcompletion reviewを除くGit/GitHubの調査、target resolution、command preparation、非approval-bound実行は`git_operator_luna`サブエージェントを使う。`fork_turns = "none"`、GPT-5.6 Luna `max`、workspace-writeとし、repository、Issue/branch/base、要求operation、現在state、ユーザーが与えた正確な権限だけをcontext packetで渡す。同じworkflow lifecycleの承認後follow-upは保存したagent IDへ送る。
 - If the current agent is already running as `git_operator_luna`, execute the assigned operation directly; never recursively delegate or spawn another `git_operator_luna` operator.
 - Coordinatorはユーザー対話と権限判断を保持し、packetにない権限をoperatorへ推測させない。operator自身のcompletion diffはreviewさせず、別のfresh-context `reviewer_luna`を使う。`git_operator_luna`を作成・確認できない場合はGit workflowを止め、Coordinatorや別modelへfallbackしない。
 - R1〜R4は、実装履歴を渡さないfresh-contextの`reviewer_luna`サブエージェントを使う。`fork_turns = "none"`、GPT-5.6 Luna `max`、read-onlyとし、親の結論や安全そうな箇所を渡さない。review lifecycleごとに新規agentを作り、有効なreview後の再reviewは保存したagent IDへ`Round N`として依頼する。
@@ -17,3 +17,22 @@
 - `reviewer_luna`サブエージェントを作成・確認できない場合は完了扱いを止める。別taskや別modelへfallbackしない。
 - 新しい不具合classはproject testや`HARNESS.md`へ昇格する。review後の見逃しは`RETRO.md`に記録し、汎用的ならglobal skillへ昇格する。同種の誤検知が2回続いたreview観点は条件を具体化する。
 - 最終報告では、riskと理由、review route、agent ID、model/effort、指紋、round数、指摘総数、採用・却下・要確認数、追加test/sensor、検証command、未検証範囲を短く明示する。
+
+## PR evidence boundary
+
+User-visible UI changes require PR video evidence; screenshots are optional supplements and never
+substitutes. Backend, configuration, and documentation-only changes are excluded. The
+`implementer_luna` coordinates browser-verification readiness but never makes the final presentation,
+privacy, or upload decision. `verifier_luna` captures local evidence at a coherent checkpoint and
+calls `$pr-evidence-video`; the Coordinator owns the final decision. Final evidence must be
+revalidated against the pushed HEAD and inherited patch fingerprint, and any head, artifact, or
+fingerprint change stops upload. Conversation upload is browser/UI-only; no API or `gh` pretend
+upload is allowed.
+
+## Speed-first implementation delegation
+
+- Coordinatorは親1つに対して同時に最大3つの子agentまでを使える。この上限は`implementer_luna`、`explorer_luna`、`verifier_luna`だけでなく、既存の`git_operator_luna`と`reviewer_luna`を含む全delegated roleの合計に適用する。実装ライフサイクルでは、独立した調査がある場合に`implementer_luna`、`explorer_luna`、`verifier_luna`を並列化するが、writerは常に`implementer_luna`の1つだけにする。`verifier_luna`の実装結果検証はcoherentな実装checkpoint後に行い、開始時は安全な非変異baseline、test map、browser planだけを独立実行できる。
+- `implementer_luna`、`explorer_luna`、`verifier_luna`はすべてGPT-5.6 Luna、`max`を使う。`implementer_luna`は`workspace-write`で実装、source edit、targeted test、browser verification orchestrationを所有する。`explorer_luna`はread-onlyのboundedなcode/contract/impact調査だけを行い、`verifier_luna`は開始時の非変異baseline／test map／browser planとcheckpoint後のtargeted test、log分析、browser確認だけを行う。verifierの`workspace-write`はログ、スクリーンショット、coverageなどtool-generated artifact専用で、source／production code／test／設定は編集しない。
+- 新規implementation lifecycleは`fork_turns = "none"`と最小context packetで起動する。packetにはrepository、Issue/branch/base、current state、acceptance criteria、risk、明示された権限だけを入れ、同じlifecycleのfix、test follow-up、browser follow-upには保存済みの同じ`implementer_luna` agent IDを再利用する。
+- Checkpoint handoffは直列化する。`implementer_luna`が明確な`checkpoint_token`と正確な`checkpoint_scope`（source pathとacceptance criteria）を返したら、Coordinatorは保存済みimplementerをpauseし、scopeの`git status --short`／`git diff`をbefore evidenceとして記録する。Verifierのimplementation-result check中はsource-mutatingなimplementer workを実行せず、verifierはbefore/after Git status/diff evidenceを記録する。source-treeが変われば結果をinvalidとし、Coordinatorはverifier完了後にだけ同じimplementerをresumeする。checkpoint前の独立した非変異baseline／test map／browser planは許可する。
+- 子agentは別のwriterをspawnせず、nested delegationを行わない。explorer/verifierは実装を代行せず、implementation agentはGit workflowやcompletion reviewを代行しない。実装agentはstage、commit、push、PRを行わず、Gitは既存の`git_operator_luna`、completion reviewは別のfresh-context `reviewer_luna`へ分離する。

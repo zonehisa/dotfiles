@@ -48,6 +48,36 @@ P0-P2 findings and a higher-risk classification do not change the review route. 
 
 Report the review rank and reason, route, reviewer agent ID, model/reasoning effort, fingerprint, reviewed commit when applicable, rounds, unique findings, classification counts, promoted tests/sensors, verification, and unverified scope. Promote project-specific defect classes to tests or `HARNESS.md`; record escaped reviewed defects in `RETRO.md`.
 
+## PR Evidence Lifecycle
+
+For a user-visible UI change, require PR video evidence. Screenshots are optional supplements and
+never substitutes; backend, configuration, and documentation-only changes use
+`Not required (non-user-visible change)`. If the privacy or artifact gate fails, keep PR delivery
+pending or closed.
+
+The `reviewer_luna` evidence-only lifecycle is separate from completion diff review. It checks the
+exact artifact, SHA-256 hash, manifest, and contact frame, plus behavior coverage, target,
+fingerprint, head, privacy, codec, size, and duration. It must not judge styling, rerender, inspect
+source, or rerun tests; this evidence review does not replace or contaminate completion review.
+
+`PRまで` authorizes only the exact already privacy/evidence-reviewed artifact upload to the same target PR/repository/branch/fingerprint/head, together with the PR body or Conversation link. Different, reencoded, replacement,
+external-storage, or other-PR artifacts require new authorization. If upload is impossible, stop
+without fallback hosting. Local artifact upload to a PR Conversation is browser/UI-only external
+write; do not pretend that an API or `gh` upload occurred. The Coordinator retains the browser upload
+and approval boundary if the operator cannot operate the UI.
+
+Before any upload, revalidate the final pushed HEAD and inherited reviewed patch fingerprint. Any
+head, artifact, or fingerprint change invalidates evidence and stops upload. Preserve the exact hash;
+update handoff status and URL only after exact upload. A UI PR body includes:
+
+```markdown
+## Visual Evidence
+[PR evidence video](<authorized Conversation or artifact link>)
+```
+
+For a non-user-visible change, use `Not required (non-user-visible change)` instead. `pr_number` may
+remain null until the PR exists.
+
 ## Commit
 
 1. Require a passed risk-routed gate with `approved_subagent` and no unresolved P0-P2 for non-trivial changes.

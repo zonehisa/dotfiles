@@ -46,10 +46,25 @@ Codexの設定とSkillsは次へリンクされます。
 
 - `codex/skills/parallel-worktree` → `~/.agents/skills/parallel-worktree`
 - `codex/skills/git-workflow` → `~/.codex/skills/git-workflow`
+- `codex/skills/pr-evidence-video` → `~/.codex/skills/pr-evidence-video`
+- `codex/agents/implementer-luna.toml` → `~/.codex/agents/implementer-luna.toml`
+- `codex/agents/explorer-luna.toml` → `~/.codex/agents/explorer-luna.toml`
+- `codex/agents/verifier-luna.toml` → `~/.codex/agents/verifier-luna.toml`
 - `codex/agents/git-operator-luna.toml` → `~/.codex/agents/git-operator-luna.toml`
 - `codex/agents/reviewer-luna.toml` → `~/.codex/agents/reviewer-luna.toml`
 
 実行時registry、lock、evidenceは`${CODEX_HOME:-$HOME/.codex}/parallel-worktree`、Worktreeはadapterごとの管理領域に保持され、dotfilesでは管理しません。
+
+実装時はGPT-5.6 Luna `max`の`implementer_luna`を唯一のwriterとして使います。独立したcode／contract／impact調査はread-onlyの`explorer_luna`、開始時の安全な非変異baseline／test map／browser planと実装checkpoint後のtargeted test／log／browser確認は`verifier_luna`へ分離します。実装checkpoint後はimplementerをpauseし、verifierがscopeのbefore/after Git status/diff evidenceを記録します。親から起動できる子agentは最大3つ（Git／review roleを含む全delegated roleの合計）で、nested delegationは行いません。
+
+### PR evidence
+
+User-visible UI changes require PR video evidence. Screenshots are optional supplements and never
+substitutes; backend, configuration, and documentation-only changes are excluded. The reusable
+`pr-evidence-video` skill is installed at ~/.codex/skills/pr-evidence-video and renders only local,
+privacy-reviewed, muted evidence with a manifest. Never install Remotion globally or in an
+application checkout. The current dotfiles/configuration change itself is non-user-visible and
+needs no video.
 
 ## コマンド
 

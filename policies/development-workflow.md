@@ -6,11 +6,11 @@
 
 | Risk | 代表例 | Plan / dig | 実装 / TDD | レビュー |
 | --- | --- | --- | --- | --- |
-| R0 | typo、文言、コメント、明白な整形 | Sol medium | Terra medium | 不要 |
-| R1 | CSS、色、余白、静的markup | Sol medium | Terra medium | fresh-context Luna subagent max |
-| R2 | hover/focus/click、JS、reactive binding、通常の挙動変更 | Sol high | Terra medium | fresh-context Luna subagent max |
-| R3 | 永続化、query、状態遷移、認可、公開契約 | Sol xhigh | Terra medium | fresh-context Luna subagent max |
-| R4 | security境界、data loss、競合・lock、重大incident | Sol xhigh | Terra medium | fresh-context Luna subagent max |
+| R0 | typo、文言、コメント、明白な整形 | Sol medium | `implementer_luna`: GPT-5.6 Luna `max`, workspace-write | 不要 |
+| R1 | CSS、色、余白、静的markup | Sol medium | `implementer_luna`: GPT-5.6 Luna `max`, workspace-write | fresh-context Luna subagent max |
+| R2 | hover/focus/click、JS、reactive binding、通常の挙動変更 | Sol high | `implementer_luna`: GPT-5.6 Luna `max`, workspace-write | fresh-context Luna subagent max |
+| R3 | 永続化、query、状態遷移、認可、公開契約 | Sol xhigh | `implementer_luna`: GPT-5.6 Luna `max`, workspace-write | fresh-context Luna subagent max |
+| R4 | security境界、data loss、競合・lock、重大incident | Sol xhigh | `implementer_luna`: GPT-5.6 Luna `max`, workspace-write | fresh-context Luna subagent max |
 
 最初にriskを決め、混在差分は最高riskを使う。UIでもイベント、表示条件、navigation、data accessを含めばR2以上とする。Codex以外は利用可能なmodelで同じ工程を守る。
 
@@ -24,6 +24,18 @@
 6. UI-onlyは画面確認から始め、binding、保存、条件、認可、queryへ影響すればTDDへ昇格する。
 
 既存のdirty差分はユーザー作業として保護する。stash、reset、clean、無関係な整形・stage・commitを行わない。
+
+## Speed-first implementation delegation
+
+Coordinatorは親1つに対して同時に最大3つの子agentまでを使える。この上限は`implementer_luna`、`explorer_luna`、`verifier_luna`だけでなく、既存の`git_operator_luna`と`reviewer_luna`を含む全delegated roleの合計に適用する。実装ライフサイクルでは、独立した調査がある場合に`implementer_luna`、`explorer_luna`、`verifier_luna`を並列化するが、writerは常に`implementer_luna`の1つだけにする。`verifier_luna`の実装結果検証はcoherentな実装checkpoint後に行い、開始時は安全な非変異baseline、test map、browser planだけを独立実行できる。子agentは最大1 delegation levelで、nested spawningやreplacement childを行わない。
+
+- `implementer_luna`: GPT-5.6 Luna `max`、`workspace-write`。実装、source edit、targeted test、browser verification orchestrationを所有する唯一のwriter。
+- `explorer_luna`: GPT-5.6 Luna `max`、read-only。packetで指定されたcode、contract、impactのboundedな独立調査だけを行い、編集もspawnも行わない。
+- `verifier_luna`: GPT-5.6 Luna `max`、`workspace-write`。開始時の非変異baseline／test map／browser planとcheckpoint後のtargeted test、log分析、browser確認だけを行う。workspace-writeはログ、スクリーンショット、coverageなどtool-generated artifact専用で、source、production code、test、設定、文書を編集しない。
+
+新規implementation lifecycleは`fork_turns = "none"`と最小context packet（repository、Issue/branch/base、current state、acceptance criteria、risk、明示された権限）で起動する。同じlifecycleのfix、targeted-test、browser follow-upは保存済みの同じ`implementer_luna` agent IDを再利用する。実装agentはstage、commit、push、PR、Git workflow、completion reviewを行わず、Gitは`git_operator_luna`、completion reviewは別のfresh-context `reviewer_luna`へ分離する。
+
+Checkpoint handoffは直列化する。`implementer_luna`が明確な`checkpoint_token`と正確な`checkpoint_scope`（source pathとacceptance criteria）を返したら、Coordinatorは保存済みimplementerをpauseし、scopeの`git status --short`／`git diff`をbefore evidenceとして記録する。Verifierのimplementation-result check中はsource-mutatingなimplementer workを実行せず、verifierはbefore/after Git status/diff evidenceを記録する。source-treeが変われば結果をinvalidとし、Coordinatorはverifier完了後にだけ同じimplementerをresumeする。checkpoint前の独立した非変異baseline／test map／browser planは許可する。
 
 ## Git workflow operator
 
@@ -48,6 +60,35 @@ Coordinatorはユーザー対話と権限判断を保持し、repository、Issue
 - `dig`: 調査と意思決定だけを行う。
 
 短縮指示が意味する権限を越えて、外部状態を変更しない。
+
+## PR evidence and user-visible change gate
+
+User-visible UI changes require PR video evidence. Screenshots are optional supplements and never
+substitutes. Backend, configuration, and documentation-only changes are excluded; the current
+dotfiles/configuration change itself is non-user-visible and needs no video. If the privacy or
+artifact gate fails, PR delivery remains pending or closed.
+
+The `implementer_luna` coordinates browser-verification readiness and the recording plan, but never
+makes the final presentation, privacy, or upload decision. At a coherent implementation checkpoint,
+`verifier_luna` performs the coherent-checkpoint browser behavior check and captures a local raw
+recording. Its objective first decision is:
+
+- Unreadable at PR width selects zoom.
+- Before/after switching selects comparison.
+- Purpose or result unclear selects captions.
+- OR selects remotion; all false selects raw.
+
+The verifier calls `$pr-evidence-video`, visually privacy-reviews notification, URL, user, token,
+customer data, and audio, then produces the artifact and manifest. The Coordinator owns the final
+decision; an explicit user override wins only within the safety contract. Remotion/Chrome first run
+may require network and browser-launch approval, while `verifier_luna` remains GPT-5.6 Luna max even
+when browser, ffmpeg, or npm tools are invoked.
+
+Checkpoint evidence may precede completion review, but final PR evidence is revalidated after commit
+against the final pushed HEAD and inherited reviewed patch fingerprint. Any head, artifact, or
+fingerprint change invalidates evidence and stops upload. `pr_number` may remain null until the PR
+exists. `git_operator_luna` prepares the exact Git target; Conversation upload is browser/UI-only
+external write. No API or gh pretend upload is allowed.
 
 ## Risk-routed review gate
 

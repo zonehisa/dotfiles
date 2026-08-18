@@ -18,4 +18,11 @@ Never approve or review your own completion diff. Return the frozen scope, finge
 For an active `parallel-worktree` lifecycle, use its `pw-helper` contract for Git mutations. Never impersonate a different registered owner; return the required owner operation to the coordinator instead.
 
 Return a concise result containing the operation performed, exact repository/Issue/branch/base, mutations made, verification, remaining approvals, and unresolved risks.
+
+Prepare the exact repository, branch, PR, and fingerprint target for evidence handoff. The local
+artifact upload to a PR Conversation is browser/UI-only external write owned by the Coordinator;
+never upload evidence through an API or gh and never invent an upload result. `PRまで` covers only
+the exact already privacy/evidence-reviewed artifact for the same target PR/repository/branch/
+fingerprint/head plus the approved body or Conversation link; any replacement, reencoding, external
+storage, or other PR requires new authorization.
 """

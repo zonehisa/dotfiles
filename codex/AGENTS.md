@@ -10,6 +10,15 @@
 - 新規review lifecycleではRound 1を全差分のfull review、Round 2を直前findingの修正差分と直接影響先に限定し、通常は最大2Roundとする。Round 3はユーザーの明示承認時だけ、Round 2の未解決finding、修正差分、直接影響先、全差分fingerprint、成功済み証跡に限定して実行し、その結果で配送を停止して新規lifecycleを自動作成しない。
 - reviewerは実装側の成功済みtestを再実行せず、Round 2で不変仕様、過去会話、過去tool outputを再読しない。証跡には既存の`review_fingerprint.py`だけを使う。
 - 差分全体を確認できない状態またはfingerprint不一致のreviewは無効とし、差分を再stage・再固定して新しいfresh-contextの`reviewer_luna`でやり直す。P0〜P2やrisk再分類はroute変更条件にせず、Round 2は直前finding、修正差分、直接影響先、全差分fingerprint、成功済み証跡だけを同じagentへ再提出する。Round 3はユーザーの明示承認後だけ実行し、その結果で配送を停止する。
+- A new review lifecycle must not be started automatically after two completed review lifecycles in one unchanged delivery scope.
+- After two completed review lifecycles in one unchanged delivery scope, a third full-review lifecycle is not started automatically.
+- Stop additional patch layering and require architecture/scope simplification plus an explicit user decision before any new lifecycle.
+- An explicitly authorized Round 3 remains bounded and terminal; it must never trigger a fresh lifecycle.
+- P0-P2 blockers must be grounded in a credible supported-use reproduction or a bounded code-path proof under the declared threat model and acceptance criteria.
+- A runnable reproduction is not required when bounded proof exists.
+- Purely theoretical or adversarial-local hardening outside supported use or the declared threat model is P3/residual risk unless the product explicitly supports hostile/multi-tenant conditions.
+- Credible security/correctness risk remains blocking.
+- Repeated P0-P2 findings in the same scope trigger architecture/acceptance-scope reconsideration, not additional defensive patches.
 - 実装担当は`git status --short`でstaged / unstaged / untrackedを確認し、review対象全体だけをstageしてからbaseとstaged-tree指紋を記録する。未stage・未追跡は別管理し、同一目的の変更を残さない。指紋記録後は差分を固定する。Round 1ではレビュアーにIssue/仕様、base、branch、完全なstaged対象、指紋、実行済みtestを渡す。Round 2は直前finding、修正差分、直接影響先、全差分fingerprint、成功済み証跡だけを渡し、Round 3はユーザーの明示承認後だけ、Round 2の未解決finding、修正差分、直接影響先、全差分fingerprint、成功済み証跡に限定する。
 - レビュアーはFindings-firstで、正しさ・回帰・API/契約不整合・状態遷移・lock/権限・security/privacy・性能・保守性・test不足を優先する。progress narrationなしのfinal-only短報と指紋の復唱を要求し、Coordinatorは完了通知を1回待つ。定期的なbusy pollをしない。
 - 指摘は採用・却下・要確認に分類する。採用した不具合は可能な限り最小の回帰testまたはsensorを先に追加してから修正し、対象全体を再stage・再固定する。P0〜P2が解消するまでgateを開かず、見解不一致はユーザー判断を仰ぐ。

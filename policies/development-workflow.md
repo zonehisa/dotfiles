@@ -116,6 +116,15 @@ P0-P2、採用P3またはその他の変更は差分を再固定し、現在の�
 - Review normally stops after two rounds. Round 3 requires explicit user approval; stop delivery after Round 3. If P0-P2 remain, do not automatically create a new lifecycle.
 - Do not rerun successful implementation-side tests or reread unchanged specifications, prior conversation, or prior tool output in Round 2. Use the existing `review_fingerprint.py` as the sole review evidence mechanism.
 - P0-P2 block commit and PR creation.
+- A new review lifecycle must not be started automatically after two completed review lifecycles in one unchanged delivery scope.
+- After two completed review lifecycles in one unchanged delivery scope, a third full-review lifecycle is not started automatically.
+- Stop additional patch layering and require architecture/scope simplification plus an explicit user decision before any new lifecycle.
+- An explicitly authorized Round 3 remains bounded and terminal; it must never trigger a fresh lifecycle.
+- P0-P2 blockers must be grounded in a credible supported-use reproduction or a bounded code-path proof under the declared threat model and acceptance criteria.
+- A runnable reproduction is not required when bounded proof exists.
+- Purely theoretical or adversarial-local hardening outside supported use or the declared threat model is P3/residual risk unless the product explicitly supports hostile/multi-tenant conditions.
+- Credible security/correctness risk remains blocking.
+- Repeated P0-P2 findings in the same scope trigger architecture/acceptance-scope reconsideration, not additional defensive patches.
 
 Reviewerはprogressなしのfinal-only短報とし、Coordinatorは完了通知を1回待つ。定期的なbusy pollをしない。findingがあればseverityとfile/line根拠を含め、なければ件数、fingerprint、残余risk、未検証範囲だけを返す。
 

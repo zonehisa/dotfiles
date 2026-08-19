@@ -30,6 +30,15 @@ P0-P2 findings and a higher-risk classification do not change the review route. 
 - Use one `reviewer_luna` agent and the existing `review_fingerprint.py`; do not add another review-state mechanism.
 - Do not rerun successful implementation-side tests. Do not reread unchanged specifications, prior conversation, or prior tool output.
 - P0-P2 block commit and PR creation.
+- A new review lifecycle must not be started automatically after two completed review lifecycles in one unchanged delivery scope.
+- After two completed review lifecycles in one unchanged delivery scope, a third full-review lifecycle is not started automatically.
+- Stop additional patch layering and require architecture/scope simplification plus an explicit user decision before any new lifecycle.
+- An explicitly authorized Round 3 remains bounded and terminal; it must never trigger a fresh lifecycle.
+- P0-P2 blockers must be grounded in a credible supported-use reproduction or a bounded code-path proof under the declared threat model and acceptance criteria.
+- A runnable reproduction is not required when bounded proof exists.
+- Purely theoretical or adversarial-local hardening outside supported use or the declared threat model is P3/residual risk unless the product explicitly supports hostile/multi-tenant conditions.
+- Credible security/correctness risk remains blocking.
+- Repeated P0-P2 findings in the same scope trigger architecture/acceptance-scope reconsideration, not additional defensive patches.
 
 1. Run `git status --short`, stage the complete intended review scope only, then run `scripts/review_fingerprint.py --base <base-ref>`. The fingerprint represents the staged index; unstaged and untracked files are outside that review and must be reported and kept out of delivery. Freeze the staged paths plus `patch_base_tree` and `patch_hash`. Review dirty submodules separately first.
 2. Build `review_lifecycle_key = repository + Issue/branch + base + reviewer_role`, `review_round_key = review_lifecycle_key + patch_base_tree + patch_hash`, and `review_context_key = acceptance_criteria + risk + target_files`. Skip submission only when both round and context keys are unchanged.

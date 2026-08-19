@@ -245,6 +245,17 @@ grep -Fq 'Round 2は直前finding、修正差分、直接影響先、全差分fi
 grep -Fq 'Round 3はユーザーの明示承認後だけ、Round 2の未解決finding' "$AGENTS"
 grep -Fq 'Round 1 packet is the complete frozen scope' "$POLICY"
 grep -Fq 'Round 2 and an explicitly authorized Round 3 packets remain bounded' "$POLICY"
+for surface in "$POLICY" "$DELIVERY" "$AGENTS" "$REVIEWER"; do
+  grep -Fq 'A new review lifecycle must not be started automatically after two completed review lifecycles in one unchanged delivery scope.' "$surface"
+  grep -Fq 'Stop additional patch layering and require architecture/scope simplification plus an explicit user decision before any new lifecycle.' "$surface"
+  grep -Fq 'An explicitly authorized Round 3 remains bounded and terminal; it must never trigger a fresh lifecycle.' "$surface"
+  grep -Fq 'P0-P2 blockers must be grounded in a credible supported-use reproduction or a bounded code-path proof under the declared threat model and acceptance criteria.' "$surface"
+  grep -Fq 'A runnable reproduction is not required when bounded proof exists.' "$surface"
+  grep -Fq 'Purely theoretical or adversarial-local hardening outside supported use or the declared threat model is P3/residual risk unless the product explicitly supports hostile/multi-tenant conditions.' "$surface"
+  grep -Fq 'Credible security/correctness risk remains blocking.' "$surface"
+  grep -Fq 'Repeated P0-P2 findings in the same scope trigger architecture/acceptance-scope reconsideration, not additional defensive patches.' "$surface"
+done
+assert_absent 'automatically start a new review lifecycle after Round 3|automatically create a new lifecycle after two rounds|runnable reproduction is required for every P0-P2|theoretical or adversarial-local hardening is P0-P2' "$POLICY" "$DELIVERY" "$AGENTS" "$REVIEWER"
 grep -Fq 'If the current agent is already running as `git_operator_luna`, execute the assigned operation directly; never recursively delegate or spawn another `git_operator_luna` operator.' "$AGENTS"
 grep -Fq 'If the current agent is already running as `git_operator_luna`, execute the assigned operation directly; never recursively delegate or spawn another `git_operator_luna` operator.' "$POLICY"
 grep -Fq 'Schema v2: expected task inventory is owner-only; `observer_tasks` is empty.' "$PARALLEL_CLEANUP"

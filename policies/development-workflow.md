@@ -37,6 +37,16 @@ Coordinatorは親1つに対して同時に最大3つの子agentまでを使え�
 
 Checkpoint handoffは直列化する。`implementer_luna`が明確な`checkpoint_token`と正確な`checkpoint_scope`（source pathとacceptance criteria）を返したら、Coordinatorは保存済みimplementerをpauseし、scopeの`git status --short`／`git diff`をbefore evidenceとして記録する。Verifierのimplementation-result check中はsource-mutatingなimplementer workを実行せず、verifierはbefore/after Git status/diff evidenceを記録する。source-treeが変われば結果をinvalidとし、Coordinatorはverifier完了後にだけ同じimplementerをresumeする。checkpoint前の独立した非変異baseline／test map／browser planは許可する。
 
+## User-visible UI workflow order
+
+以下の順序は user-visible UI changes にだけ適用する。Non-UI changes keep the existing flow.
+Use explicit checkpoint/evidence wording; do not add a complex persisted state mechanism.
+
+1. Implementation/IAB loop: `implementer_luna`は実装、in-app browser (IAB) checks、micro-adjustmentsを同じloopで反復する。Do not start completion review during the implementation/IAB loop.
+2. Human UI/behavior acceptance: coherent checkpointでCoordinatorはexact candidateをreal human/userへ提示する。Only a real human/user may provide explicit combined UI acceptance for appearance and primary behavior. The Coordinator records explicit human UI/behavior acceptance evidence tied to `checkpoint_token` and `checkpoint_scope`. The Coordinator records an ephemeral `accepted_source_fingerprint` at acceptance time for the exact `checkpoint_scope`. The fingerprint covers source content plus staged/unstaged/untracked inventory. The acceptance-time accepted_source_fingerprint is read-only evidence. AI agents may not proxy or assume this acceptance. Human feedbackは同じ保存済みimplementer/IAB loopへ戻し、ここでは`verifier_luna`や`reviewer_luna`を起動しない。
+3. Verifier technical verification: explicit human UI/behavior acceptance evidence tied to `checkpoint_token`と`checkpoint_scope`、accepted_source_fingerprintのread-only comparisonの後だけ、`verifier_luna`が同じaccepted checkpointでtests、logs、IAB/objective behavior、source before/after integrityを独立確認する。Repeat the accepted_source_fingerprint comparison in before/after evidence. A mismatch invalidates the acceptance and returns to the same implementer/IAB loop and human gate. Verifierはsubjective appearance/usability acceptanceを決めない。Tool-generated artifacts outside the exact checkpoint scope do not invalidate the accepted source fingerprint.
+4. Completion review: verifierがpassした後にだけfreeze、stage、fingerprintを行い、Luna/maxのR1〜R4 completion reviewを開始する。If verifier finds a problem or later source changes affect user-visible appearance or behavior, return to the same implementer/IAB loop and require combined human acceptance again before verifier. Purely non-user-visible verification artifact changes do not invalidate human acceptance.
+
 ## Git workflow operator
 
 Git workflow operator: agent_id per repository/Issue-or-branch lifecycle. R1〜R4のcompletion reviewを除く`ic`、`is`、`cm`、`pr`、`prr`、`prf`、`cleanup`は、`fork_turns = "none"`の`git_operator_luna`へ委譲し、GPT-5.6 Luna `max`、workspace-writeを固定する。同じworkflowの承認後follow-upは同じagentへ送る。
@@ -70,8 +80,9 @@ artifact gate fails, PR delivery remains pending or closed.
 
 The `implementer_luna` coordinates browser-verification readiness and the recording plan, but never
 makes the final presentation, privacy, or upload decision. At a coherent implementation checkpoint,
-`verifier_luna` performs the coherent-checkpoint browser behavior check and captures a local raw
-recording. Its objective first decision is:
+`verifier_luna` performs the browser behavior check and captures a local raw recording only after
+human UI/behavior acceptance evidence and accepted_source_fingerprint match; before then it may only
+perform non-mutating baseline, test-map, log-shape, or browser-plan checks. Its objective first decision is:
 
 - Unreadable at PR width selects zoom.
 - Before/after switching selects comparison.
@@ -94,11 +105,11 @@ external write. No API or gh pretend upload is allowed.
 
 レビューはTDDやUI調整の各loopでは行わず、明示review、完了、`cm`、`pr`の境界でreview対象全体をstageし、staged indexを正本として1回行う。unstaged/untrackedは別管理する。R0だけ`not_required`を許可する。R1〜R4は`fork_turns = "none"`で実装履歴を継承しないread-onlyの`reviewer_luna`を使う。
 
-Subagent review: agent_id per review_lifecycle_key. Same review_round_key+review_context_key: no duplicate sends. Collect canonical result. 有効なreview後の変更は同じagentへ`Round N`として送る。
+Subagent review: agent_id per review_lifecycle_key. Same review_round_key+review_context_key: no duplicate sends. Collect canonical result. The review_context_key includes the immutable `threat_model_supported_use_declaration_hash`. Round 1, Round 2, and an authorized Round 3 packet carry that same declaration/hash. A changed declaration/hash invalidates the current review context and requires a new context before submission; do not reuse stale bounded review evidence. 有効なreview後の変更は同じagentへ`Round N`として送る。
 
-Round 1 packet is the complete frozen scope. Round 2 and an explicitly authorized Round 3 packets remain bounded: prior findings or unresolved Round 2 findings, the fix delta, directly affected paths, the new full-scope fingerprint, and existing successful test evidence only.
+Round 1 packet is the complete frozen scope plus the immutable threat-model/supported-use declaration/hash. Round 2 and an explicitly authorized Round 3 packets remain bounded: prior findings or unresolved Round 2 findings, the fix delta, directly affected paths, the new full-scope fingerprint, the same immutable declaration/hash, and existing successful test evidence only.
 
-全差分を確認できない状態またはfingerprint不一致のreviewは無効とし、差分を再固定して新しいfresh-contextの`reviewer_luna`でやり直す。P0〜P2やrisk再分類ではrouteを変えず、Round 2は直前finding、修正差分、直接影響先、全差分fingerprint、成功済み証跡だけを同じagentへ再提出する。Round 3はユーザーの明示承認後だけ実行し、その結果で配送を停止する。subagentを作成・確認できない場合は完了扱いを止め、別taskや別modelへfallbackしない。
+全差分を確認できない状態またはfingerprint不一致のreviewは無効とし、差分を再固定して新しいfresh-contextの`reviewer_luna`でやり直す。P0〜P2やrisk再分類ではrouteを変えず、Round 2は直前finding、修正差分、直接影響先、全差分fingerprint、同じimmutable `threat_model_supported_use_declaration_hash`、成功済み証跡だけを同じagentへ再提出する。Round 3はユーザーの明示承認後だけ、未解決finding、修正差分、直接影響先、全差分fingerprint、同じimmutable `threat_model_supported_use_declaration_hash`、成功済み証跡に限定して実行し、その結果で配送を停止する。subagentを作成・確認できない場合は完了扱いを止め、別taskや別modelへfallbackしない。
 
 Review状態は次の通り扱う。
 
@@ -111,8 +122,8 @@ P0-P2、採用P3またはその他の変更は差分を再固定し、現在の�
 ### Bounded review rounds
 
 - These rules apply only to review lifecycles created after this policy; do not rewrite an existing lifecycle.
-- Round 1 is a full review of the complete frozen diff. Round 2 receives only prior findings, the fix delta, directly affected paths, the new fingerprint, and existing successful test evidence.
-- An explicitly authorized Round 3 remains bounded to unresolved Round 2 findings, the fix delta, directly affected paths, the new full-scope fingerprint, and existing successful test evidence.
+- Round 1 is a full review of the complete frozen diff. Round 2 receives only the prior findings, the fix delta, directly affected paths, the new fingerprint, the immutable `threat_model_supported_use_declaration_hash`, and existing successful test evidence.
+- An explicitly authorized Round 3 remains bounded to unresolved Round 2 findings, the fix delta, directly affected paths, the new full-scope fingerprint, the same immutable `threat_model_supported_use_declaration_hash`, and existing successful test evidence.
 - Review normally stops after two rounds. Round 3 requires explicit user approval; stop delivery after Round 3. If P0-P2 remain, do not automatically create a new lifecycle.
 - Do not rerun successful implementation-side tests or reread unchanged specifications, prior conversation, or prior tool output in Round 2. Use the existing `review_fingerprint.py` as the sole review evidence mechanism.
 - P0-P2 block commit and PR creation.

@@ -35,4 +35,23 @@ coordinator. Completion review remains the separate fresh-context reviewer_luna 
 For user-visible UI work, coordinate browser-verification readiness and hand off the local recording
 plan to verifier_luna. Never make the final presentation, privacy, or upload decision; the
 Coordinator owns that decision and the evidence-review boundary.
+
+For user-visible UI changes, keep iterating implementation, in-app browser (IAB) checks, and
+micro-adjustments in this same saved implementer loop until a coherent candidate is ready. At that
+checkpoint, present the exact candidate to a real human/user through the Coordinator for explicit
+combined UI acceptance covering appearance and primary behavior. Do not start verifier_luna or
+reviewer_luna before explicit human UI/behavior acceptance; AI agents may not proxy or assume it.
+The Coordinator records an ephemeral `accepted_source_fingerprint` at acceptance time for the exact
+`checkpoint_scope`. The fingerprint covers source content plus staged/unstaged/untracked inventory.
+The acceptance-time accepted_source_fingerprint is read-only evidence.
+Resume this same saved implementer agent for human feedback and continue the IAB loop. Do not start
+completion review during the implementation/IAB loop. After explicit acceptance is tied to the
+checkpoint_token, checkpoint_scope, and accepted_source_fingerprint, pause source-mutating work for
+verifier_luna; only after its
+pass may the Coordinator freeze, stage, fingerprint, and start the Luna/max completion review. If
+verifier finds a problem or later source changes affect user-visible appearance or behavior, resume
+this same loop and require combined human acceptance again. Purely tool-generated verification
+artifacts do not invalidate human acceptance. A mismatch invalidates the acceptance and returns to the
+same implementer/IAB loop and human gate. Non-UI changes keep the existing flow; use explicit
+checkpoint/evidence wording and do not add a complex persisted state mechanism.
 """

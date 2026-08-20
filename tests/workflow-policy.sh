@@ -30,6 +30,21 @@ assert_absent() {
   fi
 }
 
+assert_sequence() {
+  local file="$1"
+  shift
+  local previous_line=0
+  local marker line
+  for marker in "$@"; do
+    line=$(grep -nF -- "$marker" "$file" | head -n1 | cut -d: -f1 || true)
+    if [[ -z "$line" || "$line" -le "$previous_line" ]]; then
+      printf 'Expected ordered workflow markers in %s: %s\n' "$file" "$marker" >&2
+      exit 1
+    fi
+    previous_line="$line"
+  done
+}
+
 if (assert_absent 'approved_independent' <(printf 'approved_independent\n')) 2>/dev/null; then
   printf 'assert_absent failed to reject an obsolete marker.\n' >&2
   exit 1
@@ -218,7 +233,7 @@ assert_absent 'independent (Codex )?(task|review)|独立(task|Codexタスク)|ap
 
 grep -Fq 'These rules apply only to review lifecycles created after this policy' "$POLICY"
 grep -Fq 'Round 1 is a full review of the complete frozen diff' "$POLICY"
-grep -Fq 'Round 2 receives only prior findings' "$POLICY"
+grep -Fq 'Round 2 receives only the prior findings' "$POLICY"
 grep -Fq 'An explicitly authorized Round 3 remains bounded to unresolved Round 2 findings' "$POLICY"
 grep -Fq 'Review normally stops after two rounds' "$POLICY"
 grep -Fq 'Round 3 requires explicit user approval; stop delivery after Round 3.' "$POLICY"
@@ -228,6 +243,8 @@ grep -Fq 'Round 2を直前findingの修正差分と直接影響先に限定' "$A
 grep -Fq 'Round 3はユーザーの明示承認時だけ、Round 2の未解決finding' "$AGENTS"
 grep -Fq 'Round 1 is a full review' "$DELIVERY"
 grep -Fq 'Round 2 receives only the prior findings' "$DELIVERY"
+grep -Fq 'Round 2 receives only the prior findings, their fix delta, directly affected paths, the new fingerprint, the immutable `threat_model_supported_use_declaration_hash`, and existing successful test evidence.' "$DELIVERY"
+grep -Fq 'An explicitly authorized Round 3 remains bounded to unresolved Round 2 findings, their fix delta, directly affected paths, the new full-scope fingerprint, the same immutable `threat_model_supported_use_declaration_hash`, and existing successful test evidence.' "$DELIVERY"
 grep -Fq 'do not send another complete diff' "$DELIVERY"
 grep -Fq 'For Round 1 only, give the reviewer' "$DELIVERY"
 grep -Fq 'For Round 2, send only the prior findings' "$DELIVERY"
@@ -241,10 +258,22 @@ assert_absent 'Send the complete diff to the same saved agent as `Round N`' "$DE
 assert_absent '同じagentで修正後の全差分を再reviewする' "$AGENTS" "$POLICY"
 assert_absent '4\. Give the reviewer only acceptance criteria' "$DELIVERY"
 grep -Fq 'Round 1ではレビュアーにIssue/仕様、base、branch、完全なstaged対象、指紋、実行済みtestを渡す' "$AGENTS"
-grep -Fq 'Round 2は直前finding、修正差分、直接影響先、全差分fingerprint、成功済み証跡だけ' "$AGENTS"
-grep -Fq 'Round 3はユーザーの明示承認後だけ、Round 2の未解決finding' "$AGENTS"
+grep -Fq 'Round 2は直前finding、修正差分、直接影響先、全差分fingerprint、同じimmutable `threat_model_supported_use_declaration_hash`、成功済み証跡だけ' "$AGENTS"
+grep -Fq 'Round 3はユーザーの明示承認後だけ、未解決finding' "$AGENTS"
 grep -Fq 'Round 1 packet is the complete frozen scope' "$POLICY"
 grep -Fq 'Round 2 and an explicitly authorized Round 3 packets remain bounded' "$POLICY"
+grep -Fq 'Round 2 receives only the prior findings, the fix delta, directly affected paths, the new fingerprint, the immutable `threat_model_supported_use_declaration_hash`, and existing successful test evidence.' "$POLICY"
+grep -Fq 'An explicitly authorized Round 3 remains bounded to unresolved Round 2 findings, the fix delta, directly affected paths, the new full-scope fingerprint, the same immutable `threat_model_supported_use_declaration_hash`, and existing successful test evidence.' "$POLICY"
+grep -Fq 'Round 2の未解決finding、修正差分、直接影響先、全差分fingerprint、同じimmutable `threat_model_supported_use_declaration_hash`、成功済み証跡' "$AGENTS"
+grep -Fq 'Round 3はユーザーの明示承認後だけ、未解決finding、修正差分、直接影響先、全差分fingerprint、同じimmutable `threat_model_supported_use_declaration_hash`、成功済み証跡' "$AGENTS"
+assert_absent 'Round 2 receives only the prior findings, (their )?fix delta, directly affected paths, the new fingerprint, and existing successful test evidence\.' "$DELIVERY" "$POLICY"
+assert_absent 'An explicitly authorized Round 3 remains bounded to unresolved Round 2 findings, (their )?fix delta, directly affected paths, the new full-scope fingerprint, and existing successful test evidence\.' "$DELIVERY" "$POLICY"
+assert_absent 'For Round 2, send only the prior findings, fix delta, directly affected paths, new full-scope fingerprint, and existing successful test evidence;' "$DELIVERY"
+assert_absent 'For an explicitly approved Round 3, send only unresolved Round 2 findings, fix delta, directly affected paths, new full-scope fingerprint, and existing successful test evidence\.' "$DELIVERY"
+assert_absent 'Round 2 and an explicitly authorized Round 3 packets remain bounded: prior findings or unresolved Round 2 findings, the fix delta, directly affected paths, the new full-scope fingerprint, and existing successful test evidence only\.' "$POLICY"
+assert_absent 'Round 2は直前finding、修正差分、直接影響先、全差分fingerprint、成功済み証跡だけを同じagentへ再提出する。' "$AGENTS" "$POLICY"
+assert_absent 'Round 3はユーザーの明示承認後だけ、Round 2の未解決finding、修正差分、直接影響先、全差分fingerprint、成功済み証跡に限定する。' "$AGENTS"
+assert_absent 'Round 3はユーザーの明示承認時だけ、Round 2の未解決finding、修正差分、直接影響先、全差分fingerprint、成功済み証跡に限定して実行する。' "$AGENTS"
 for surface in "$POLICY" "$DELIVERY" "$AGENTS" "$REVIEWER"; do
   grep -Fq 'A new review lifecycle must not be started automatically after two completed review lifecycles in one unchanged delivery scope.' "$surface"
   grep -Fq 'Stop additional patch layering and require architecture/scope simplification plus an explicit user decision before any new lifecycle.' "$surface"
@@ -311,7 +340,9 @@ grep -Fq 'Backend, configuration, and documentation-only changes are excluded' "
 grep -Fq 'If the privacy or' "$POLICY"
 grep -Fq 'The `implementer_luna` coordinates browser-verification readiness' "$POLICY"
 grep -Fq 'makes the final presentation, privacy, or upload decision' "$POLICY"
-grep -Fq '`verifier_luna` performs the coherent-checkpoint browser behavior check' "$POLICY"
+grep -Fq '`verifier_luna` performs the browser behavior check and captures a local raw recording only after' "$POLICY"
+grep -Fq '`verifier_luna` captures local evidence at a coherent checkpoint only' "$AGENTS"
+assert_absent '`verifier_luna` performs the coherent-checkpoint browser behavior check and captures a local raw recording.' "$POLICY" "$AGENTS"
 grep -Fq 'Unreadable at PR width selects zoom' "$POLICY"
 grep -Fq 'Before/after switching selects comparison' "$POLICY"
 grep -Fq 'Purpose or result unclear selects captions' "$POLICY"
@@ -343,6 +374,7 @@ grep -Fq 'If upload is impossible, stop' "$DELIVERY"
 grep -Fq 'update handoff status and URL only after exact upload' "$DELIVERY"
 grep -Fq '## Visual Evidence' "$DELIVERY"
 grep -Fq 'Not required (non-user-visible change)' "$DELIVERY"
+grep -Fq 'browser verification of the happy path and one or two likely edge paths only after explicit human UI/behavior acceptance evidence' "$DELIVERY"
 grep -Fq 'may require network and browser-launch approval' "$POLICY"
 grep -Fq '`verifier_luna` remains GPT-5.6 Luna max' "$POLICY"
 grep -Fq 'dotfiles/configuration change itself is non-user-visible and needs no video' "$POLICY"
@@ -358,6 +390,91 @@ grep -q 'visually privacy-review notification' "$VERIFIER"
 grep -q 'browser-launch approval' "$VERIFIER"
 grep -q 'never upload evidence through an API or gh' "$OPERATOR"
 grep -q 'PRまで' "$OPERATOR"
+
+# User-visible UI workflow order: implementation/IAB loops, explicit human
+# acceptance, independent technical verification, then completion review.
+UI_GATE_SURFACES=("$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md")
+for surface in "${UI_GATE_SURFACES[@]}"; do
+  grep -Fq 'User-visible UI workflow order' "$surface"
+  grep -Fq '1. Implementation/IAB loop' "$surface"
+  grep -Fq '2. Human UI/behavior acceptance' "$surface"
+  grep -Fq '3. Verifier technical verification' "$surface"
+  grep -Fq '4. Completion review' "$surface"
+  grep -Fq 'Use explicit checkpoint/evidence wording; do not add a complex persisted state mechanism.' "$surface"
+  grep -Fq 'Only a real human/user may provide explicit combined UI acceptance for appearance and primary behavior.' "$surface"
+  grep -Fq 'The Coordinator records explicit human UI/behavior acceptance evidence tied to' "$surface"
+  grep -Fq 'checkpoint_scope`.' "$surface"
+  grep -Fq 'AI agents may not proxy or assume this acceptance.' "$surface"
+  grep -Fq 'Do not start completion review during the implementation/IAB loop.' "$surface"
+  grep -Fq 'Luna/max' "$surface"
+  grep -Fq 'source before/after integrity' "$surface"
+  grep -Fq 'Non-UI changes keep the existing flow.' "$surface"
+  grep -Fq 'Purely non-user-visible verification artifact changes do not invalidate human acceptance.' "$surface"
+  grep -Fq 'If verifier finds a problem or later source changes affect user-visible appearance or behavior, return to the same implementer/IAB loop and require combined human acceptance again before verifier.' "$surface"
+  grep -Fq 'The Coordinator records an ephemeral `accepted_source_fingerprint` at acceptance time for the exact `checkpoint_scope`.' "$surface"
+  grep -Fq 'The fingerprint covers source content plus staged/unstaged/untracked inventory.' "$surface"
+  grep -Fq 'The acceptance-time accepted_source_fingerprint is read-only evidence.' "$surface"
+  grep -Fq 'A mismatch invalidates the acceptance and returns to the same implementer/IAB loop and human gate.' "$surface"
+  assert_absent 'completion review runs during the implementation/IAB loop' "$surface"
+  assert_absent 'verifier_luna runs before human UI/behavior acceptance' "$surface"
+  assert_absent 'accepted_source_fingerprint is optional' "$surface"
+done
+
+for surface in "${UI_GATE_SURFACES[@]}"; do
+  assert_sequence "$surface" \
+    '1. Implementation/IAB loop' \
+    '2. Human UI/behavior acceptance' \
+    '3. Verifier technical verification' \
+    '4. Completion review'
+done
+
+grep -Fq 'keep iterating implementation, in-app browser (IAB) checks' "$IMPLEMENTER"
+grep -Fq 'micro-adjustments in this same saved implementer loop' "$IMPLEMENTER"
+grep -Fq 'present the exact candidate to a real human/user' "$IMPLEMENTER"
+grep -Fq 'Do not start verifier_luna or' "$IMPLEMENTER"
+grep -Fq 'reviewer_luna before explicit human UI/behavior acceptance' "$IMPLEMENTER"
+grep -Fq 'Resume this same saved implementer agent for human feedback' "$IMPLEMENTER"
+grep -Fq 'require explicit human UI/behavior acceptance tied to checkpoint_token' "$VERIFIER"
+grep -Fq 'and checkpoint_scope before running final technical verification' "$VERIFIER"
+grep -Fq 'For that UI path, do not run final' "$VERIFIER"
+grep -Fq 'technical verification before explicit human UI/behavior acceptance.' "$VERIFIER"
+grep -Fq 'Do not decide subjective' "$VERIFIER"
+grep -Fq 'appearance or usability acceptance' "$VERIFIER"
+grep -Fq 'Source changes that affect user-visible appearance' "$VERIFIER"
+grep -Fq 'behavior invalidate the acceptance' "$VERIFIER"
+grep -Fq 'verification artifacts alone do not' "$VERIFIER"
+grep -Fq 'invalidate human acceptance.' "$VERIFIER"
+grep -Fq 'verification before explicit human' "$VERIFIER"
+assert_absent 'verifier_luna may accept UI/behavior on behalf of a human' "$VERIFIER"
+
+# UI browser behavior and recording are post-acceptance verifier work only.
+grep -Fq 'Before human acceptance for a user-visible UI change, verifier may only run non-mutating baseline, test-map, log-shape, or browser-plan checks.' "$VERIFIER"
+grep -Fq 'Do not perform final browser behavior verification or capture a recording before human acceptance.' "$VERIFIER"
+grep -Fq 'Only after the Coordinator records human UI/behavior acceptance evidence tied to checkpoint_token and checkpoint_scope may verifier perform final browser behavior verification or capture a recording.' "$VERIFIER"
+grep -Fq 'For non-UI coherent checkpoints, no human UI/behavior acceptance or accepted_source_fingerprint is required; after checkpoint_token and checkpoint_scope are present and the implementer is paused, continue the existing targeted tests, log analysis, and objective verification flow.' "$VERIFIER"
+grep -Fq 'For user-visible UI changes only, before starting final technical or browser verification, compare the acceptance-time `accepted_source_fingerprint`' "$VERIFIER"
+grep -Fq 'For non-UI checkpoints, do not require human UI/behavior acceptance or accepted_source_fingerprint; use the existing targeted verification flow.' "$VERIFIER"
+assert_absent 'Before human acceptance, verifier may only run non-mutating baseline, test-map, log-shape, or browser-plan checks\.' "$VERIFIER"
+assert_absent '^Before starting final technical or browser verification, compare the acceptance-time `accepted_source_fingerprint` for the exact' "$VERIFIER"
+assert_absent 'At a coherent checkpoint for a user-visible UI change, perform the browser behavior check and capture the local raw recording.' "$VERIFIER"
+
+# Threat-model/supported-use declaration is immutable review-context evidence.
+for surface in "$POLICY" "$DELIVERY" "$AGENTS"; do
+  grep -Fq 'review_context_key includes the immutable `threat_model_supported_use_declaration_hash`.' "$surface"
+  grep -Fq 'Round 1, Round 2, and an authorized Round 3 packet carry that same declaration/hash.' "$surface"
+  grep -Fq 'A changed declaration/hash invalidates the current review context and requires a new context before submission; do not reuse stale bounded review evidence.' "$surface"
+done
+grep -Fq 'threat_model_supported_use_declaration_hash' "$DELIVERY"
+grep -Fq 'threat_model_supported_use_declaration_hash' "$POLICY"
+grep -Fq 'threat_model_supported_use_declaration_hash' "$AGENTS"
+assert_absent 'review_context_key = acceptance_criteria + risk + target_files' "$DELIVERY"
+assert_absent 'packets omit the threat model' "$POLICY" "$DELIVERY" "$AGENTS"
+
+assert_sequence "$VERIFIER" \
+  'Before human acceptance for a user-visible UI change, verifier may only run non-mutating baseline, test-map, log-shape, or browser-plan checks.' \
+  'Only after the Coordinator records human UI/behavior acceptance evidence tied to checkpoint_token and checkpoint_scope may verifier perform final browser behavior verification or capture a recording.' \
+  'Repeat the accepted_source_fingerprint comparison in before/after evidence.'
+
 grep -Fq 'PR evidence skill link/unlink test passed.' <(bash "$ROOT/tests/setup-skills.sh")
 [[ -d "$PR_EVIDENCE_SKILL" ]] || { printf 'PR evidence skill directory missing.\n' >&2; exit 1; }
 

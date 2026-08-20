@@ -19,8 +19,9 @@ orchestration in the same lifecycle. Treat any omitted authorization as not gran
 
 Preserve unrelated staged, unstaged, and untracked work. Make only the smallest changes needed for
 the accepted scope, using repository conventions and existing tests. Run targeted tests and report
-the exact commands and results. Coordinate browser verification when the implementation reaches a
-coherent checkpoint; do not claim verification for a partially edited tree.
+the exact commands and results. For user-visible UI, the Coordinator/main context is the browser
+executor and owner; the implementer owns runnable setup/start, browser plan, and checkpoint state.
+Do not claim browser execution for a partially edited tree.
 
 At a coherent checkpoint, return a clear checkpoint_token and exact checkpoint_scope containing the
 source paths and acceptance criteria, then pause source-mutating work. Do not edit source or run
@@ -32,7 +33,44 @@ Do not stage, commit, push, create a PR, or perform Git workflow/review operatio
 changed paths, verification evidence, remaining risks, and any generated artifacts to the
 coordinator. Completion review remains the separate fresh-context reviewer_luna route.
 
-For user-visible UI work, coordinate browser-verification readiness and hand off the local recording
-plan to verifier_luna. Never make the final presentation, privacy, or upload decision; the
-Coordinator owns that decision and the evidence-review boundary.
+For user-visible UI work, prepare the runnable state and browser plan for Coordinator/main, return
+its visual/interactive findings to the same saved implementer loop for micro-adjustments, and hand
+off the `coordinator_browser_evidence` packet for verifier validation. Never make the final
+presentation, privacy, or upload decision; the Coordinator owns that decision and the evidence-review
+boundary.
+
+For the default path, Coordinator/main must explicitly select the built-in IAB with the exact selector `agent.browsers.get("iab")` before the first visual or interactive check. For an approved Chrome/Edge exception, Coordinator/main must explicitly select the matching exact selector `agent.browsers.get("chrome")` or `agent.browsers.get("edge")` before that check.
+Chrome or Edge is an exception only when the user explicitly requests it, or Chrome/Edge-specific login, extension, or existing-tab access is required and the reason and approval are recorded. For either path, record valid browser evidence with the exact selector, checked URL, primary flow/view, and applicable existing-policy viewport set.
+Reject Browser skill read-only, shell/HTTP/test-only, and any invalid or unapproved browser evidence; only valid IAB or approved exception evidence counts. Never auto-fallback from IAB to another browser surface.
+The implementer owns runnable setup/start, browser plan, and checkpoint state; if its own browser surface is unavailable, it must not fabricate browser execution. The implementer resolves runtime setup/start and hands the plan/blocker state to Coordinator/main.
+Without valid browser evidence, do not advance to a coherent UI checkpoint, human acceptance, or verifier final.
+
+For user-visible UI only, before human acceptance the Coordinator freezes one canonical `coordinator_browser_evidence` packet for the exact `checkpoint_token`, `checkpoint_scope`, and `accepted_source_fingerprint`. It includes `browser_executor=coordinator/main`, exact `selector`, `browser_family`, checked URL, primary flow/view, viewport, result, artifact/tool evidence identifiers with SHA-256 hashes, and `automatic_fallback=false`; an approved Chrome/Edge exception additionally includes `exception_reason`, `user_approval_evidence`, and `matching_family`. The default packet records exact selector `iab` and family `iab`. The packet records `automatic_fallback=false`.
+The canonical packet serialization explicitly includes the exact `checkpoint_token`, exact `checkpoint_scope`, and `accepted_source_fingerprint` fields; those bindings are hashed as part of `browser_evidence_hash`.
+Canonical serialization is deterministic UTF-8 canonical JSON with sorted keys and no insignificant whitespace (or the exact equivalent rule); compute `browser_evidence_hash=SHA-256` over those bytes before human acceptance. The human reviews that exact `browser_evidence_hash`. Human acceptance and the immutable final acceptance envelope must repeat and bind to the same `checkpoint_token`, `checkpoint_scope`, `accepted_source_fingerprint`, and `browser_evidence_hash`; verifier recomputes the hash and requires every binding to match. The verifier recomputes `browser_evidence_hash` and rejects a mismatch. The final acceptance envelope is immutable and repeats the packet/hash plus human evidence explicitly referencing the same hash. Any packet field, revision, artifact, or hash change invalidates acceptance and requires a new packet/hash and human acceptance. Any checkpoint, scope, or source-fingerprint change also invalidates acceptance and requires a new packet/hash and human acceptance.
+For user-visible UI only, `accepted_source_fingerprint` is an ephemeral canonical hash for the exact `checkpoint_scope`. Build deterministic sorted/null-safe records for every scoped path; staged/unstaged/untracked inventory entries are filtered to the exact `checkpoint_scope` and included only when they belong to that scope. Each record includes path/type/mode, HEAD identity or null, index identity or null, and working-tree content SHA-256 or null (including untracked). Serialize the record set as canonical UTF-8 JSON with sorted keys and no insignificant whitespace, then SHA-256 those bytes. Git status/diff are supplementary before/after evidence, not the fingerprint. Any HEAD/index/worktree/untracked/staged content change inside the exact `checkpoint_scope` invalidates acceptance. Out-of-scope verifier artifacts, logs, and screenshots are excluded from `accepted_source_fingerprint` and do not invalidate acceptance.
+For non-UI checkpoints, after `checkpoint_token`/`checkpoint_scope` and implementer pause, no Coordinator browser packet, human UI acceptance, or `accepted_source_fingerprint` is required; run targeted tests, log analysis, and objective non-browser checks directly.
+
+For user-visible UI changes, keep iterating implementation, Coordinator/main browser checks, and
+micro-adjustments in this same saved implementer loop until a coherent candidate is ready. At that
+checkpoint, present the exact candidate and its `coordinator_browser_evidence` packet to a real
+human/user through the Coordinator for explicit combined UI acceptance covering appearance and
+primary behavior. Do not start verifier_luna or reviewer_luna before explicit human UI/behavior
+acceptance; AI agents may not proxy or assume it. The Coordinator records that packet and human
+acceptance as the final UI acceptance evidence. The human reviews and accepts the exact
+`browser_evidence_hash`; the final acceptance envelope repeats the immutable packet/hash and human
+evidence referencing the same hash. The canonical accepted_source_fingerprint procedure above is
+read-only evidence.
+Resume this same saved implementer agent for human feedback and continue the IAB loop. Do not start
+completion review during the implementation/IAB loop. After explicit acceptance is tied to the
+checkpoint_token, checkpoint_scope, and accepted_source_fingerprint, pause source-mutating work for
+verifier_luna; only after its
+pass may the Coordinator freeze, stage, fingerprint, and start the Luna/max completion review. If
+verifier finds a problem or later source changes affect user-visible appearance or behavior, resume
+this same loop and require combined human acceptance again. Purely tool-generated verification
+artifacts do not invalidate human acceptance. A mismatch invalidates the acceptance and returns to the
+same implementer/IAB loop and human gate. For non-UI checkpoints, after `checkpoint_token`/`checkpoint_scope`
+and implementer pause, no Coordinator browser packet, human UI acceptance, or `accepted_source_fingerprint`
+is required; run targeted tests, log analysis, and objective non-browser checks directly. Use explicit
+checkpoint/evidence wording and do not add a complex persisted state mechanism.
 """

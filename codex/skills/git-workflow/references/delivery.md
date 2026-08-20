@@ -7,12 +7,38 @@ Run this gate once after implementation and user-feedback iterations are verifie
 ## User-visible UI workflow order
 
 The following order applies only to user-visible UI changes. Non-UI changes keep the existing flow.
+For non-UI checkpoints, use targeted tests, log analysis, and objective non-browser checks directly; no Coordinator browser packet, human UI acceptance, or `accepted_source_fingerprint` is required.
 Use explicit checkpoint/evidence wording; do not add a complex persisted state mechanism.
 
-1. Implementation/IAB loop: `implementer_luna` owns implementation, in-app browser (IAB) checks, and micro-adjustments in one loop. Do not start completion review during the implementation/IAB loop.
-2. Human UI/behavior acceptance: at a coherent checkpoint, the Coordinator presents the exact candidate to a real human/user. Only a real human/user may provide explicit combined UI acceptance for appearance and primary behavior. The Coordinator records explicit human UI/behavior acceptance evidence tied to `checkpoint_token` and `checkpoint_scope`. The Coordinator records an ephemeral `accepted_source_fingerprint` at acceptance time for the exact `checkpoint_scope`. The fingerprint covers source content plus staged/unstaged/untracked inventory. The acceptance-time accepted_source_fingerprint is read-only evidence. AI agents may not proxy or assume this acceptance. Human feedback resumes the same saved implementer/IAB loop; do not start `verifier_luna` or `reviewer_luna` yet.
-3. Verifier technical verification: only after explicit human UI/behavior acceptance evidence tied to `checkpoint_token` and `checkpoint_scope` and a read-only accepted_source_fingerprint comparison, `verifier_luna` independently checks tests, logs, IAB/objective behavior, and source before/after integrity on that same accepted checkpoint. Repeat the accepted_source_fingerprint comparison in before/after evidence. A mismatch invalidates the acceptance and returns to the same implementer/IAB loop and human gate. The verifier does not decide subjective appearance or usability acceptance. Tool-generated artifacts outside the exact checkpoint scope do not invalidate the accepted source fingerprint.
+### Built-in IAB selection and evidence
+
+Every user-visible UI checkpoint and human acceptance requires valid browser evidence owned by Coordinator/main; verifier final requires a validated `coordinator_browser_evidence` packet and source integrity. Verifier-side IAB availability is not required.
+
+For user-visible UI, the Coordinator/main context is the browser executor and owner: it runs the visual/interactive checks and records the `coordinator_browser_evidence` packet.
+
+For the default path, before the first visual or interactive check, explicitly select the built-in IAB with the exact selector `agent.browsers.get("iab")`. A Browser skill read, shell/HTTP/test result, `getDefault()`, `getForUrl()`, or `agent.browsers.get("extension")` is not valid browser evidence.
+
+Chrome or Edge is an exception only when the user explicitly requests it, or Chrome/Edge-specific login, extension, or existing-tab access is required and the reason and approval are recorded. For an approved browser exception, select the exact matching `agent.browsers.get("chrome")` or `agent.browsers.get("edge")` selector and reject a missing reason, missing approval, or family mismatch. Never auto-fallback from IAB to another browser surface.
+
+Both browser paths require an exact selector, checked URL, primary flow/view, applicable existing-policy viewport set, and no automatic fallback.
+
+Missing vendor/node_modules/.env/DB, an app that is not started, or a port conflict is not a reason to defer IAB to verifier. The implementer must resolve setup/start, or stop and report IAB unavailable/blocker. Without valid browser evidence, do not advance to a coherent UI checkpoint, human acceptance, or verifier final.
+
+For user-visible UI only, before human acceptance the Coordinator freezes one canonical `coordinator_browser_evidence` packet for the exact `checkpoint_token`, `checkpoint_scope`, and `accepted_source_fingerprint`. It includes `browser_executor=coordinator/main`, exact `selector`, `browser_family`, checked URL, primary flow/view, viewport, result, artifact/tool evidence identifiers with SHA-256 hashes, and `automatic_fallback=false`; an approved Chrome/Edge exception additionally includes `exception_reason`, `user_approval_evidence`, and `matching_family`. The default packet records exact selector `iab` and family `iab`. The packet records `automatic_fallback=false`.
+The canonical packet serialization explicitly includes the exact `checkpoint_token`, exact `checkpoint_scope`, and `accepted_source_fingerprint` fields; those bindings are hashed as part of `browser_evidence_hash`.
+Canonical serialization is deterministic UTF-8 canonical JSON with sorted keys and no insignificant whitespace (or the exact equivalent rule); compute `browser_evidence_hash=SHA-256` over those bytes before human acceptance. The human reviews that exact `browser_evidence_hash`. Human acceptance and the immutable final acceptance envelope must repeat and bind to the same `checkpoint_token`, `checkpoint_scope`, `accepted_source_fingerprint`, and `browser_evidence_hash`; verifier recomputes the hash and requires every binding to match. The verifier recomputes `browser_evidence_hash` and rejects a mismatch. The final acceptance envelope is immutable and repeats the packet/hash plus human evidence explicitly referencing the same hash. Any packet field, revision, artifact, or hash change invalidates acceptance and requires a new packet/hash and human acceptance. Any checkpoint, scope, or source-fingerprint change also invalidates acceptance and requires a new packet/hash and human acceptance.
+For user-visible UI only, `accepted_source_fingerprint` is an ephemeral canonical hash for the exact `checkpoint_scope`. Build deterministic sorted/null-safe records for every scoped path; staged/unstaged/untracked inventory entries are filtered to the exact `checkpoint_scope` and included only when they belong to that scope. Each record includes path/type/mode, HEAD identity or null, index identity or null, and working-tree content SHA-256 or null (including untracked). Serialize the record set as canonical UTF-8 JSON with sorted keys and no insignificant whitespace, then SHA-256 those bytes. Git status/diff are supplementary before/after evidence, not the fingerprint. Any HEAD/index/worktree/untracked/staged content change inside the exact `checkpoint_scope` invalidates acceptance. Out-of-scope verifier artifacts, logs, and screenshots are excluded from `accepted_source_fingerprint` and do not invalidate acceptance.
+For non-UI checkpoints, after `checkpoint_token`/`checkpoint_scope` and implementer pause, no Coordinator browser packet, human UI acceptance, or `accepted_source_fingerprint` is required; run targeted tests, log analysis, and objective non-browser checks directly. If Coordinator/main cannot obtain the approved browser surface for user-visible UI, stop and report IAB unavailable/blocker; verifier-side browser unavailability alone is non-blocking when the valid packet and human acceptance are present.
+
+1. Implementation/IAB loop: Coordinator/main is the browser executor and owner. It runs the default IAB or approved Chrome/Edge exception, records and freezes the canonical packet/hash before human acceptance, and returns visual/interactive findings to the same saved implementer loop for micro-adjustments. The implementer owns runnable setup/start, browser plan, and checkpoint state. Do not start completion review during the implementation/IAB loop.
+2. Human UI/behavior acceptance: at a coherent checkpoint, the Coordinator presents the exact candidate and its same-checkpoint packet to a real human/user. Only a real human/user may provide explicit combined UI acceptance for appearance and primary behavior. Human combined appearance and primary-behavior acceptance applies to the same Coordinator checkpoint and its `coordinator_browser_evidence` packet. The Coordinator records that packet and human acceptance as the final UI acceptance evidence, tied to `checkpoint_token`, `checkpoint_scope`, and `accepted_source_fingerprint`. The Coordinator records explicit human UI/behavior acceptance evidence tied to `checkpoint_token` and `checkpoint_scope`. The Coordinator records an ephemeral `accepted_source_fingerprint` at acceptance time for the exact `checkpoint_scope`. The canonical accepted_source_fingerprint procedure above is read-only evidence. The human reviews and accepts the exact `browser_evidence_hash`; the final acceptance envelope repeats the immutable packet/hash and human evidence referencing the same hash. AI agents may not proxy or assume this acceptance. Human feedback resumes the same saved implementer loop; do not start `verifier_luna` or `reviewer_luna` yet.
+3. Verifier technical verification: for user-visible UI only, only after the Coordinator packet, explicit human UI/behavior acceptance, and a read-only accepted_source_fingerprint comparison, `verifier_luna` validates the same accepted checkpoint through the packet, recomputes `browser_evidence_hash`, verifies source before/after integrity, and runs targeted tests, logs, and objective non-browser checks. It does not acquire, share, or rerun the Coordinator IAB session. A mismatch invalidates the acceptance and returns to the same implementer/IAB loop and human gate. The verifier does not decide subjective appearance or usability acceptance. Tool-generated artifacts outside the exact checkpoint scope do not invalidate the accepted source fingerprint.
 4. Completion review: only after the verifier passes, freeze, stage, and fingerprint the accepted scope, then start the Luna/max R1-R4 completion review. If verifier finds a problem or later source changes affect user-visible appearance or behavior, return to the same implementer/IAB loop and require combined human acceptance again before verifier. Purely non-user-visible verification artifact changes do not invalidate human acceptance.
+
+For an explicitly requested video/evidence attachment, the following recording and rendering lifecycle applies.
+The Coordinator/main captures or references the local raw recording from its browser evidence packet.
+For user-visible UI only, verifier_luna validates the packet, artifact identifiers/hashes, and source integrity read-only; it
+does not acquire or rerun the IAB session.
 
 ### Review Risk Rank
 
@@ -69,11 +95,24 @@ Report the review rank and reason, route, reviewer agent ID, model/reasoning eff
 
 ## PR Evidence Lifecycle
 
-For a user-visible UI change, require PR video evidence. Screenshots are optional supplements and
-never substitutes; backend, configuration, and documentation-only changes use
-`Not required (non-user-visible change)`. If the privacy or artifact gate fails, keep PR delivery
-pending or closed.
+Video evidence is opt-in: the full PR evidence lifecycle runs only when the user explicitly requests
+a video/evidence attachment for this delivery. If the user did not explicitly request video/evidence,
+do not create, capture, inspect, reference, transform, or review any recording/video; do not call
+`$pr-evidence-video`, run the evidence-only review, apply the privacy/artifact gate, upload evidence,
+or block PR delivery; use the exact PR body text "Not requested (video evidence is opt-in)". If the
+user explicitly requests video/evidence, require the
+full PR evidence lifecycle: create the video with `$pr-evidence-video`, run the evidence-only review,
+pass privacy/artifact checks, revalidate authorization/fingerprint/head, upload through the
+browser/UI, and add the `## Visual Evidence` link. IAB functional verification and explicit human
+UI/behavior acceptance remain mandatory for every user-visible UI change, whether or not video
+evidence is requested. Non-user-visible configuration, documentation, and backend-only changes
+remain outside both the UI IAB/human gate and the opt-in video path. For an explicitly requested
+video/evidence attachment, if the privacy or artifact gate fails, keep PR delivery pending or closed.
+A later explicit request for video/evidence for the same delivery enters the same full lifecycle and
+authorization/fingerprint/head/privacy/upload boundaries; there is no automatic fallback or pretend
+upload.
 
+For an explicitly requested video/evidence attachment:
 The `reviewer_luna` evidence-only lifecycle is separate from completion diff review. It checks the
 exact artifact, SHA-256 hash, manifest, and contact frame, plus behavior coverage, target,
 fingerprint, head, privacy, codec, size, and duration. It must not judge styling, rerender, inspect
@@ -83,15 +122,25 @@ source, or rerun tests; this evidence review does not replace or contaminate com
 external-storage, or other-PR artifacts require new authorization. If upload is impossible, stop
 without fallback hosting. Local artifact upload to a PR Conversation is browser/UI-only external
 write; do not pretend that an API or `gh` upload occurred. The Coordinator retains the browser upload
-and approval boundary if the operator cannot operate the UI.
+and approval boundary if the operator cannot operate the UI. No API or `gh` pretend upload is
+allowed.
 
 Before any upload, revalidate the final pushed HEAD and inherited reviewed patch fingerprint. Any
 head, artifact, or fingerprint change invalidates evidence and stops upload. Preserve the exact hash;
-update handoff status and URL only after exact upload. A UI PR body includes:
+update handoff status and URL only after exact upload. A UI PR body includes the following only after
+an explicitly requested video/evidence attachment has completed the full lifecycle:
 
 ```markdown
 ## Visual Evidence
 [PR evidence video](<authorized Conversation or artifact link>)
+```
+
+When a UI delivery has no explicit video/evidence request, use the exact text below and do not block
+delivery on missing video or artifact:
+
+```markdown
+## Visual Evidence
+Not requested (video evidence is opt-in)
 ```
 
 For a non-user-visible change, use `Not required (non-user-visible change)` instead. `pr_number` may
@@ -110,8 +159,8 @@ remain null until the PR exists.
 1. Require a passed risk-routed gate with `not_required` or `approved_subagent`, no unresolved P0-P2, and a clean working tree.
 2. Verify repository, base, branch, Issue target, state file, commit log, diff, and existing PRs all identify the same work. Ignore stale state files whose saved branch differs.
 3. Stop on target mismatch or an existing PR for the same head branch.
-4. Run the nearest relevant tests. For user-visible workflow changes, run browser verification of the happy path and one or two likely edge paths only after explicit human UI/behavior acceptance evidence, an accepted_source_fingerprint match, and the verifier pass for that checkpoint.
-5. Include only checks actually run. Add compact Mermaid diagrams or safe screenshots/video only when they materially aid review; durable behavior belongs in project specs too.
+4. Run the nearest relevant tests. For user-visible workflow changes, require the Coordinator's valid browser evidence packet, explicit human UI/behavior acceptance, an accepted_source_fingerprint match, and the verifier pass for that checkpoint; do not require a verifier-side browser rerun.
+5. Include only checks actually run. Add compact Mermaid diagrams or safe screenshots only when they are independently allowed and materially aid review; video generation, attachment, or link is permitted only after an explicit video/evidence request. Durable behavior belongs in project specs too.
 6. Push and create the PR only with explicit authorization. `PRまで` is sufficient authorization for commit, push, and PR creation as one bundle for the exact reviewed scope; show concise progress but do not stop between steps. Use `Closes #...` only for the verified target Issue. In an active `parallel-worktree` lifecycle, request `pw-helper push` and use its registered repo/base/head evidence for PR creation; never push an arbitrary ref directly.
 7. Report the PR URL and stop.
 

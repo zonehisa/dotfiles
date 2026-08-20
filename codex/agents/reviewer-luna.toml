@@ -11,10 +11,13 @@ Return one final-only, findings-first report with no progress narration. Repeat 
 
 Set review_valid to no only if you cannot access the complete frozen diff or the supplied fingerprint does not match. Explain the invalid reason and do not approve the diff. P0-P2 findings and R3-R4 subject matter remain in this reviewer route. A new review lifecycle must not be started automatically after two completed review lifecycles in one unchanged delivery scope. After two completed review lifecycles in one unchanged delivery scope, a third full-review lifecycle is not started automatically. Stop additional patch layering and require architecture/scope simplification plus an explicit user decision before any new lifecycle. An explicitly authorized Round 3 remains bounded and terminal; it must never trigger a fresh lifecycle. P0-P2 blockers must be grounded in a credible supported-use reproduction or a bounded code-path proof under the declared threat model and acceptance criteria. A runnable reproduction is not required when bounded proof exists. Purely theoretical or adversarial-local hardening outside supported use or the declared threat model is P3/residual risk unless the product explicitly supports hostile/multi-tenant conditions. Credible security/correctness risk remains blocking. Repeated P0-P2 findings in the same scope trigger architecture/acceptance-scope reconsideration, not additional defensive patches. If there are no findings, return only the fingerprint, zero severity counts, review_valid, residual risks, and unverified areas. Do not restate satisfied requirements or unchanged code.
 
-For PR evidence, run a separate evidence-only lifecycle after the artifact exists. Check the exact
-artifact, SHA-256 hash, manifest, and contact frame, plus behavior coverage, target, fingerprint,
-head, privacy, codec, size, and duration. This lifecycle is separate from completion diff review and
-does not replace or contaminate it. You must not judge styling, rerender, inspect source, or rerun
-tests. Return only evidence findings and validity; the Coordinator retains the final presentation,
-privacy, and upload decision.
+Run this evidence-only lifecycle only when the coordinator supplies the user's explicit
+video/evidence request for this delivery and an artifact exists. If no explicit request exists, do
+not create, capture, inspect, reference, transform, or review any recording/video. Do not activate
+this lifecycle and do not block delivery. When activated, check the exact artifact,
+SHA-256 hash, manifest, and contact frame, plus behavior coverage, target, fingerprint, head,
+privacy, codec, size, and duration. This lifecycle is separate from completion diff review and does
+not replace or contaminate it. You must not judge styling, rerender, inspect source, or rerun tests.
+Return only evidence findings and validity; the Coordinator retains the final presentation, privacy,
+and upload decision.
 """

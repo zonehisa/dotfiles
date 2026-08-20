@@ -45,6 +45,36 @@ assert_sequence() {
   done
 }
 
+assert_wrapped_phrase() {
+  local expected="$1"
+  shift
+  local normalized_expected normalized_file file
+  normalized_expected=$(printf '%s' "$expected" | tr -s '[:space:]' ' ')
+  for file in "$@"; do
+    normalized_file=$(tr '\n' ' ' < "$file" | tr -s '[:space:]' ' ')
+    if [[ "$normalized_file" != *"$normalized_expected"* ]]; then
+      printf 'Expected wrapped policy phrase in %s: %s\n' "$file" "$expected" >&2
+      exit 1
+    fi
+  done
+}
+
+assert_recording_scope() {
+  local file="$1"
+  local scope_line recording_line
+  scope_line=$(grep -nF 'For an explicitly requested video/evidence attachment, the following recording' "$file" | head -n1 | cut -d: -f1 || true)
+  if [[ -z "$scope_line" ]]; then
+    printf 'Missing explicit recording scope marker in %s.\n' "$file" >&2
+    exit 1
+  fi
+  while IFS=: read -r recording_line _; do
+    if [[ -n "$recording_line" && "$recording_line" -lt "$scope_line" ]]; then
+      printf 'Recording/capture/reference/decision leaked before explicit video scope in %s at line %s.\n' "$file" "$recording_line" >&2
+      exit 1
+    fi
+  done < <(grep -nEi 'raw recording|captures or references .*recording|Unreadable at PR width|Before/after switching|Purpose or result unclear|selects remotion|all false selects raw|privacy-reviews .*notification|artifact and manifest|final presentation' "$file" || true)
+}
+
 if (assert_absent 'approved_independent' <(printf 'approved_independent\n')) 2>/dev/null; then
   printf 'assert_absent failed to reject an obsolete marker.\n' >&2
   exit 1
@@ -334,22 +364,22 @@ fi
 assert_absent 'R0 / R1は独立AI review不要' "$POLICY" "$AGENTS"
 
 # PR evidence lifecycle and UI distribution contract.
-grep -Fq 'User-visible UI changes require PR video evidence' "$POLICY"
-grep -Fq 'Screenshots are optional supplements' "$POLICY"
-grep -Fq 'Backend, configuration, and documentation-only changes are excluded' "$POLICY"
-grep -Fq 'If the privacy or' "$POLICY"
-grep -Fq 'The `implementer_luna` coordinates browser-verification readiness' "$POLICY"
-grep -Fq 'makes the final presentation, privacy, or upload decision' "$POLICY"
-grep -Fq '`verifier_luna` performs the browser behavior check and captures a local raw recording only after' "$POLICY"
-grep -Fq '`verifier_luna` captures local evidence at a coherent checkpoint only' "$AGENTS"
+grep -Fq 'Video evidence is opt-in' "$POLICY"
+grep -Fq 'full PR evidence lifecycle' "$POLICY"
+assert_wrapped_phrase 'Non-user-visible configuration, documentation, and backend-only changes remain outside' "$POLICY"
+grep -Fq 'privacy or artifact gate' "$POLICY"
+grep -Fq 'The `implementer_luna` prepares runnable state and browser-plan readiness' "$POLICY"
+grep -Fq 'Coordinator owns the final decision' "$POLICY"
+grep -Fq 'The Coordinator/main captures or references the local raw recording from its browser evidence packet.' "$POLICY"
+grep -Fq 'The Coordinator/main captures or references the local raw recording from its browser evidence packet.' "$AGENTS"
 assert_absent '`verifier_luna` performs the coherent-checkpoint browser behavior check and captures a local raw recording.' "$POLICY" "$AGENTS"
 grep -Fq 'Unreadable at PR width selects zoom' "$POLICY"
 grep -Fq 'Before/after switching selects comparison' "$POLICY"
 grep -Fq 'Purpose or result unclear selects captions' "$POLICY"
 grep -Fq 'OR selects remotion; all false selects raw' "$POLICY"
-grep -Fq 'calls `$pr-evidence-video`' "$POLICY"
+grep -Fq 'The Coordinator calls `$pr-evidence-video`' "$POLICY"
 grep -Fq 'visually privacy-reviews notification, URL, user, token' "$POLICY"
-grep -Fq 'The Coordinator owns the final' "$POLICY"
+grep -Fq 'Coordinator owns the final decision' "$POLICY"
 grep -Fq 'explicit user override wins only within the safety contract' "$POLICY"
 grep -Fq 'The `reviewer_luna` evidence-only lifecycle' "$DELIVERY"
 grep -Fq 'exact artifact, SHA-256 hash, manifest, and contact frame' "$DELIVERY"
@@ -361,7 +391,7 @@ grep -Fq 'fingerprint change invalidates evidence and stops upload' "$POLICY"
 grep -Fq '`pr_number` may remain null until the PR' "$POLICY"
 grep -Fq '`git_operator_luna` prepares the exact Git target' "$POLICY"
 grep -Fq 'Conversation upload is browser/UI-only' "$POLICY"
-grep -Fq 'No API or gh pretend upload is allowed' "$POLICY"
+grep -Fq 'No API or `gh` pretend upload is allowed' "$POLICY"
 grep -Fq 'Coordinator performs the browser/UI upload' "$HANDOFF"
 grep -Fq 'operator prepares only the target and hash' "$HANDOFF"
 assert_absent 'GitHub UI upload is prohibited' "$HANDOFF"
@@ -374,22 +404,54 @@ grep -Fq 'If upload is impossible, stop' "$DELIVERY"
 grep -Fq 'update handoff status and URL only after exact upload' "$DELIVERY"
 grep -Fq '## Visual Evidence' "$DELIVERY"
 grep -Fq 'Not required (non-user-visible change)' "$DELIVERY"
-grep -Fq 'browser verification of the happy path and one or two likely edge paths only after explicit human UI/behavior acceptance evidence' "$DELIVERY"
+grep -Fq "require the Coordinator's valid browser evidence packet, explicit human UI/behavior acceptance" "$DELIVERY"
 grep -Fq 'may require network and browser-launch approval' "$POLICY"
 grep -Fq '`verifier_luna` remains GPT-5.6 Luna max' "$POLICY"
-grep -Fq 'dotfiles/configuration change itself is non-user-visible and needs no video' "$POLICY"
+assert_wrapped_phrase 'Non-user-visible configuration, documentation, and backend-only changes remain outside' "$POLICY"
 grep -Fq 'pr-evidence-video' "$ROOT/setup.sh" "$ROOT/README.md"
 grep -Fq 'installed at ~/.codex/skills/pr-evidence-video' "$ROOT/README.md"
 grep -Fq 'Never install Remotion globally' "$ROOT/README.md"
 grep -q 'evidence-only lifecycle' "$REVIEWER"
 grep -q 'contact frame' "$REVIEWER"
 grep -q 'must not judge styling, rerender, inspect' "$REVIEWER"
-grep -q 'Never make the final presentation, privacy, or upload decision' "$IMPLEMENTER"
-grep -q 'Call `\$pr-evidence-video`' "$VERIFIER"
-grep -q 'visually privacy-review notification' "$VERIFIER"
-grep -q 'browser-launch approval' "$VERIFIER"
+assert_wrapped_phrase 'Never make the final presentation, privacy, or upload decision' "$IMPLEMENTER"
+grep -q 'The Coordinator calls' "$VERIFIER"
+assert_absent 'verifier_luna.*\$pr-evidence-video|verifier_luna.*browser-launch approval' "$VERIFIER"
 grep -q 'never upload evidence through an API or gh' "$OPERATOR"
 grep -q 'PRまで' "$OPERATOR"
+
+# Video evidence is an explicit per-delivery opt-in. Keep this contract separate
+# from the mandatory UI IAB and human behavior gate.
+VIDEO_POLICY_SURFACES=("$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md")
+for surface in "${VIDEO_POLICY_SURFACES[@]}"; do
+  assert_wrapped_phrase 'Video evidence is opt-in: the full PR evidence lifecycle runs only when the user explicitly requests a video/evidence attachment for this delivery.' "$surface"
+  assert_wrapped_phrase 'If the user did not explicitly request video/evidence, do not create, capture, inspect, reference, transform, or review any recording/video; do not call `$pr-evidence-video`, run the evidence-only review, apply the privacy/artifact gate, upload evidence, or block PR delivery; use the exact PR body text "Not requested (video evidence is opt-in)".' "$surface"
+  assert_wrapped_phrase 'If the user explicitly requests video/evidence, require the full PR evidence lifecycle: create the video with `$pr-evidence-video`, run the evidence-only review, pass privacy/artifact checks, revalidate authorization/fingerprint/head, upload through the browser/UI, and add the `## Visual Evidence` link.' "$surface"
+  assert_wrapped_phrase 'A later explicit request for video/evidence for the same delivery enters the same full lifecycle and authorization/fingerprint/head/privacy/upload boundaries; there is no automatic fallback or pretend upload.' "$surface"
+  assert_wrapped_phrase 'IAB functional verification and explicit human UI/behavior acceptance remain mandatory for every user-visible UI change, whether or not video evidence is requested.' "$surface"
+  assert_wrapped_phrase 'Non-user-visible configuration, documentation, and backend-only changes remain outside both the UI IAB/human gate and the opt-in video path.' "$surface"
+done
+
+assert_absent 'User-visible UI changes require PR video evidence' "$POLICY" "$AGENTS" "$ROOT/README.md"
+assert_absent 'For a user-visible UI change, require PR video evidence' "$DELIVERY"
+grep -Fq '## Visual Evidence' "$DELIVERY"
+grep -Fq 'Not requested (video evidence is opt-in)' "$DELIVERY"
+grep -Fq 'Not required (non-user-visible change)' "$DELIVERY"
+grep -Fq 'No API or `gh` pretend upload is allowed' "$POLICY" "$AGENTS" "$DELIVERY"
+
+assert_wrapped_phrase 'Run this evidence-only lifecycle only when the coordinator supplies the user' "$REVIEWER"
+assert_wrapped_phrase 'explicit video/evidence request for this delivery and an artifact exists' "$REVIEWER"
+assert_wrapped_phrase 'Do not activate this lifecycle and do not block delivery' "$REVIEWER"
+assert_wrapped_phrase 'Video evidence is opt-in: the full PR evidence lifecycle runs only when the user explicitly requests a video/evidence attachment for this delivery.' "$VERIFIER"
+assert_wrapped_phrase 'The evidence-only reviewer is conditional on the explicit request' "$VERIFIER"
+assert_wrapped_phrase 'If no explicit request exists, do not create, capture, inspect, reference, transform, or review any recording/video; do not validate video evidence or block delivery.' "$VERIFIER"
+
+# No-request UI delivery must not capture, inspect, reference, transform, or
+# make presentation decisions about recordings before the explicit video scope.
+assert_recording_scope "$POLICY"
+assert_recording_scope "$AGENTS"
+assert_recording_scope "$DELIVERY"
+assert_recording_scope "$VERIFIER"
 
 # User-visible UI workflow order: implementation/IAB loops, explicit human
 # acceptance, independent technical verification, then completion review.
@@ -402,8 +464,7 @@ for surface in "${UI_GATE_SURFACES[@]}"; do
   grep -Fq '4. Completion review' "$surface"
   grep -Fq 'Use explicit checkpoint/evidence wording; do not add a complex persisted state mechanism.' "$surface"
   grep -Fq 'Only a real human/user may provide explicit combined UI acceptance for appearance and primary behavior.' "$surface"
-  grep -Fq 'The Coordinator records explicit human UI/behavior acceptance evidence tied to' "$surface"
-  grep -Fq 'checkpoint_scope`.' "$surface"
+  grep -Fq 'The Coordinator records that packet and human acceptance as the final UI acceptance evidence, tied to' "$surface"
   grep -Fq 'AI agents may not proxy or assume this acceptance.' "$surface"
   grep -Fq 'Do not start completion review during the implementation/IAB loop.' "$surface"
   grep -Fq 'Luna/max' "$surface"
@@ -411,9 +472,9 @@ for surface in "${UI_GATE_SURFACES[@]}"; do
   grep -Fq 'Non-UI changes keep the existing flow.' "$surface"
   grep -Fq 'Purely non-user-visible verification artifact changes do not invalidate human acceptance.' "$surface"
   grep -Fq 'If verifier finds a problem or later source changes affect user-visible appearance or behavior, return to the same implementer/IAB loop and require combined human acceptance again before verifier.' "$surface"
-  grep -Fq 'The Coordinator records an ephemeral `accepted_source_fingerprint` at acceptance time for the exact `checkpoint_scope`.' "$surface"
-  grep -Fq 'The fingerprint covers source content plus staged/unstaged/untracked inventory.' "$surface"
-  grep -Fq 'The acceptance-time accepted_source_fingerprint is read-only evidence.' "$surface"
+  grep -Fq 'For user-visible UI only, `accepted_source_fingerprint` is an ephemeral canonical hash for the exact `checkpoint_scope`.' "$surface"
+  grep -Fq 'Serialize the record set as canonical UTF-8 JSON with sorted keys and no insignificant whitespace, then SHA-256 those bytes.' "$surface"
+  grep -Fq 'Git status/diff are supplementary before/after evidence, not the fingerprint.' "$surface"
   grep -Fq 'A mismatch invalidates the acceptance and returns to the same implementer/IAB loop and human gate.' "$surface"
   assert_absent 'completion review runs during the implementation/IAB loop' "$surface"
   assert_absent 'verifier_luna runs before human UI/behavior acceptance' "$surface"
@@ -428,35 +489,158 @@ for surface in "${UI_GATE_SURFACES[@]}"; do
     '4. Completion review'
 done
 
-grep -Fq 'keep iterating implementation, in-app browser (IAB) checks' "$IMPLEMENTER"
+grep -Fq 'keep iterating implementation, Coordinator/main browser checks' "$IMPLEMENTER"
 grep -Fq 'micro-adjustments in this same saved implementer loop' "$IMPLEMENTER"
-grep -Fq 'present the exact candidate to a real human/user' "$IMPLEMENTER"
+assert_wrapped_phrase 'present the exact candidate and its `coordinator_browser_evidence` packet to a real human/user' "$IMPLEMENTER"
 grep -Fq 'Do not start verifier_luna or' "$IMPLEMENTER"
-grep -Fq 'reviewer_luna before explicit human UI/behavior acceptance' "$IMPLEMENTER"
+assert_wrapped_phrase 'reviewer_luna before explicit human UI/behavior acceptance' "$IMPLEMENTER"
 grep -Fq 'Resume this same saved implementer agent for human feedback' "$IMPLEMENTER"
 grep -Fq 'require explicit human UI/behavior acceptance tied to checkpoint_token' "$VERIFIER"
-grep -Fq 'and checkpoint_scope before running final technical verification' "$VERIFIER"
-grep -Fq 'For that UI path, do not run final' "$VERIFIER"
-grep -Fq 'technical verification before explicit human UI/behavior acceptance.' "$VERIFIER"
+assert_wrapped_phrase 'and checkpoint_scope plus a valid Coordinator packet before running final technical verification' "$VERIFIER"
+assert_wrapped_phrase 'For that UI path, do not run final technical verification before explicit human UI/behavior acceptance.' "$VERIFIER"
 grep -Fq 'Do not decide subjective' "$VERIFIER"
-grep -Fq 'appearance or usability acceptance' "$VERIFIER"
-grep -Fq 'Source changes that affect user-visible appearance' "$VERIFIER"
-grep -Fq 'behavior invalidate the acceptance' "$VERIFIER"
-grep -Fq 'verification artifacts alone do not' "$VERIFIER"
-grep -Fq 'invalidate human acceptance.' "$VERIFIER"
+assert_wrapped_phrase 'appearance or usability acceptance' "$VERIFIER"
+assert_wrapped_phrase 'Source changes that affect user-visible appearance' "$VERIFIER"
+assert_wrapped_phrase 'behavior invalidate the acceptance' "$VERIFIER"
+assert_wrapped_phrase 'verification artifacts alone do not invalidate human acceptance.' "$VERIFIER"
 grep -Fq 'verification before explicit human' "$VERIFIER"
 assert_absent 'verifier_luna may accept UI/behavior on behalf of a human' "$VERIFIER"
 
 # UI browser behavior and recording are post-acceptance verifier work only.
-grep -Fq 'Before human acceptance for a user-visible UI change, verifier may only run non-mutating baseline, test-map, log-shape, or browser-plan checks.' "$VERIFIER"
-grep -Fq 'Do not perform final browser behavior verification or capture a recording before human acceptance.' "$VERIFIER"
-grep -Fq 'Only after the Coordinator records human UI/behavior acceptance evidence tied to checkpoint_token and checkpoint_scope may verifier perform final browser behavior verification or capture a recording.' "$VERIFIER"
-grep -Fq 'For non-UI coherent checkpoints, no human UI/behavior acceptance or accepted_source_fingerprint is required; after checkpoint_token and checkpoint_scope are present and the implementer is paused, continue the existing targeted tests, log analysis, and objective verification flow.' "$VERIFIER"
-grep -Fq 'For user-visible UI changes only, before starting final technical or browser verification, compare the acceptance-time `accepted_source_fingerprint`' "$VERIFIER"
-grep -Fq 'For non-UI checkpoints, do not require human UI/behavior acceptance or accepted_source_fingerprint; use the existing targeted verification flow.' "$VERIFIER"
+grep -Fq 'For user-visible UI only, before human acceptance, verifier may run only non-mutating baseline, test-map, log-shape, or browser-plan checks.' "$VERIFIER"
+grep -Fq 'Do not perform final technical verification before human acceptance and the Coordinator evidence packet.' "$VERIFIER"
+grep -Fq 'For user-visible UI only, only after the Coordinator records human UI/behavior acceptance evidence tied to checkpoint_token and checkpoint_scope and provides a valid `coordinator_browser_evidence` packet may verifier proceed.' "$VERIFIER"
+grep -Fq 'For non-UI checkpoints, after `checkpoint_token`/`checkpoint_scope` and implementer pause, no Coordinator browser packet, human UI acceptance, or `accepted_source_fingerprint` is required; run targeted tests, log analysis, and objective non-browser checks directly.' "$VERIFIER"
+grep -Fq 'For user-visible UI only, before starting final technical verification, recompute the canonical `accepted_source_fingerprint` for the exact `checkpoint_scope`' "$VERIFIER"
 assert_absent 'Before human acceptance, verifier may only run non-mutating baseline, test-map, log-shape, or browser-plan checks\.' "$VERIFIER"
 assert_absent '^Before starting final technical or browser verification, compare the acceptance-time `accepted_source_fingerprint` for the exact' "$VERIFIER"
 assert_absent 'At a coherent checkpoint for a user-visible UI change, perform the browser behavior check and capture the local raw recording.' "$VERIFIER"
+
+# Built-in IAB is the mandatory first visual/interactive surface for UI work.
+IAB_GATE_SURFACES=("$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md")
+for surface in "${IAB_GATE_SURFACES[@]}"; do
+  grep -Fq 'For the default path, before the first visual or interactive check, explicitly select the built-in IAB with the exact selector `agent.browsers.get("iab")`.' "$surface"
+  grep -Fq 'A Browser skill read, shell/HTTP/test result, `getDefault()`, `getForUrl()`, or `agent.browsers.get("extension")` is not valid browser evidence.' "$surface"
+  grep -Fq 'Chrome or Edge is an exception only when the user explicitly requests it, or Chrome/Edge-specific login, extension, or existing-tab access is required and the reason and approval are recorded.' "$surface"
+  grep -Fq 'Never auto-fallback from IAB to another browser surface.' "$surface"
+  grep -Fq 'Missing vendor/node_modules/.env/DB, an app that is not started, or a port conflict is not a reason to defer IAB to verifier.' "$surface"
+  grep -Fq 'Without valid browser evidence, do not advance to a coherent UI checkpoint, human acceptance, or verifier final.' "$surface"
+done
+
+grep -Fq 'For the default UI path, require Coordinator/main evidence with exact selector=`iab` from `agent.browsers.get("iab")`.' "$VERIFIER"
+grep -Fq 'Reject Browser skill read-only, shell/HTTP/test-only, or unapproved browser evidence.' "$VERIFIER"
+grep -Fq 'The implementer owns runnable setup/start, browser plan, and checkpoint state; if its own browser surface is unavailable, it must not fabricate browser execution.' "$IMPLEMENTER"
+grep -Fq 'Without valid browser evidence, do not advance to a coherent UI checkpoint, human acceptance, or verifier final.' "$IMPLEMENTER"
+grep -Fq 'For both the default IAB path and an approved browser exception, browser evidence must include the exact selector, checked URL, primary flow/view, and applicable existing-policy viewport set.' "$VERIFIER"
+assert_absent 'getDefault\(\).*acceptable IAB evidence|acceptable IAB evidence.*getDefault\(\)|getForUrl\(\).*acceptable IAB evidence|acceptable IAB evidence.*getForUrl\(\)|get\("extension"\).*acceptable IAB evidence|acceptable IAB evidence.*get\("extension"\)' "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md" "$IMPLEMENTER" "$VERIFIER"
+assert_absent 'defer IAB to verifier as a runtime-preparation step|先送り.*verifier.*IAB|verifier.*IAB.*先送り' "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md" "$IMPLEMENTER" "$VERIFIER"
+assert_absent 'skill[- ]read[- ]only evidence is (valid|sufficient)|skill[- ]only evidence (is )?(valid|sufficient)|accept skill read-only evidence' "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md" "$IMPLEMENTER" "$VERIFIER"
+
+# An approved Chrome/Edge exception is a verifier-validated alternate path; the default remains IAB.
+grep -Fq 'An approved browser exception may use exact selector=`chrome` or `edge` only when the user explicitly names that family, or when a Chrome/Edge-specific login, extension, or existing-tab requirement has a recorded reason and explicit user approval.' "$VERIFIER"
+grep -Fq 'For an approved browser exception, require the exception reason, approval evidence, and a matching browser family; reject missing approval, missing reason, family mismatch, and automatic fallback.' "$VERIFIER"
+grep -Fq 'An IAB-to-Chrome/Edge automatic fallback is rejected.' "$VERIFIER"
+assert_absent 'browser exception (may be )?accepted without approval|browser exception (may be )?accepted without reason|browser family mismatch (is )?accepted|automatic fallback (is )?accepted' "$VERIFIER"
+
+# Both browser branches use one valid-evidence gate; the default is IAB and the exception is explicit and approved.
+VALID_BROWSER_EVIDENCE_SURFACES=("$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md")
+for surface in "${VALID_BROWSER_EVIDENCE_SURFACES[@]}"; do
+  grep -Fq 'Every user-visible UI checkpoint and human acceptance requires valid browser evidence owned by Coordinator/main; verifier final requires a validated `coordinator_browser_evidence` packet and source integrity. Verifier-side IAB availability is not required.' "$surface"
+  grep -Fq 'Both browser paths require an exact selector, checked URL, primary flow/view, applicable existing-policy viewport set, and no automatic fallback.' "$surface"
+  grep -Fq 'Without valid browser evidence, do not advance to a coherent UI checkpoint, human acceptance, or verifier final.' "$surface"
+  grep -Fq 'Chrome or Edge is an exception only when the user explicitly requests it, or Chrome/Edge-specific login, extension, or existing-tab access is required and the reason and approval are recorded.' "$surface"
+done
+
+grep -Fq 'For the default path, Coordinator/main must explicitly select the built-in IAB with the exact selector `agent.browsers.get("iab")` before the first visual or interactive check.' "$IMPLEMENTER"
+grep -Fq 'For an approved Chrome/Edge exception, Coordinator/main must explicitly select the matching exact selector `agent.browsers.get("chrome")` or `agent.browsers.get("edge")` before that check.' "$IMPLEMENTER"
+grep -Fq 'Chrome or Edge is an exception only when the user explicitly requests it, or Chrome/Edge-specific login, extension, or existing-tab access is required and the reason and approval are recorded.' "$IMPLEMENTER"
+grep -Fq 'For either path, record valid browser evidence with the exact selector, checked URL, primary flow/view, and applicable existing-policy viewport set.' "$IMPLEMENTER"
+grep -Fq 'Reject Browser skill read-only, shell/HTTP/test-only, and any invalid or unapproved browser evidence; only valid IAB or approved exception evidence counts.' "$IMPLEMENTER"
+grep -Fq 'Never auto-fallback from IAB to another browser surface.' "$IMPLEMENTER"
+grep -Fq 'Without valid browser evidence, do not advance to a coherent UI checkpoint, human acceptance, or verifier final.' "$IMPLEMENTER"
+
+grep -Fq 'For both the default IAB path and an approved browser exception, browser evidence must include the exact selector, checked URL, primary flow/view, and applicable existing-policy viewport set.' "$VERIFIER"
+grep -Fq 'An approved Chrome/Edge exception additionally requires a specific reason, explicit user approval evidence, and a matching browser family.' "$VERIFIER"
+grep -Fq 'Without valid browser evidence, do not advance to a coherent UI checkpoint, human acceptance, or verifier final.' "$VERIFIER"
+assert_absent 'approved browser exception.*(skip|omit|without).*(URL|primary flow|viewport|reason|approval)|approved browser exception.*IAB evidence.*always required' "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md" "$IMPLEMENTER" "$VERIFIER"
+
+# Coordinator-owned browser execution and packet validation replace verifier-owned IAB execution.
+assert_absent '実装checkpoint後のtargeted test／log／browser確認は`verifier_luna`へ分離します' "$ROOT/README.md"
+assert_absent 'verifier_luna.*checkpoint後のtargeted test、log分析、browser確認だけを行う' "$AGENTS" "$POLICY"
+assert_absent 'description = "Luna/max verifier for targeted tests, log analysis, and browser checks after an implementation checkpoint\."' "$VERIFIER"
+
+for surface in "$ROOT/README.md" "$AGENTS" "$POLICY"; do
+  grep -Fq 'For user-visible UI, the Coordinator/main context is the browser executor and owner: it runs the visual/interactive checks and records the `coordinator_browser_evidence` packet.' "$surface"
+done
+grep -Fq 'Validate the `coordinator_browser_evidence` packet read-only.' "$VERIFIER"
+assert_wrapped_phrase 'verifier_luna validates the packet, artifact identifiers/hashes, and source integrity read-only; it does not acquire or rerun the IAB session.' "$VERIFIER"
+assert_wrapped_phrase 'run the bounded targeted tests, analyze their logs/output, and run objective non-browser checks' "$VERIFIER"
+
+# Round 1 regression sensors: immutable browser evidence, explicit UI/non-UI branching,
+# exception authorization binding, and canonical source-scope fingerprint coverage.
+EVIDENCE_POLICY_SURFACES=("$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md" "$IMPLEMENTER" "$VERIFIER")
+for surface in "${EVIDENCE_POLICY_SURFACES[@]}"; do
+  grep -Fq 'The canonical packet serialization explicitly includes the exact `checkpoint_token`, exact `checkpoint_scope`, and `accepted_source_fingerprint` fields; those bindings are hashed as part of `browser_evidence_hash`.' "$surface"
+  grep -Fq 'Human acceptance and the immutable final acceptance envelope must repeat and bind to the same `checkpoint_token`, `checkpoint_scope`, `accepted_source_fingerprint`, and `browser_evidence_hash`; verifier recomputes the hash and requires every binding to match.' "$surface"
+  assert_absent 'The `coordinator_browser_evidence` packet must include `browser_executor=coordinator/main`, exact selector, checked URL, primary flow/view, viewport, result, artifact/tool evidence identifiers/hashes, `checkpoint_token`, `checkpoint_scope`, `accepted_source_fingerprint`, and human acceptance\.' "$surface"
+  assert_absent 'fingerprint covers source content plus staged/unstaged/untracked inventory' "$surface"
+  assert_absent 'every scoped path and staged/unstaged/untracked inventory+content' "$surface"
+  grep -Fq 'For user-visible UI only, before human acceptance the Coordinator freezes one canonical `coordinator_browser_evidence` packet' "$surface"
+  grep -Fq 'Canonical serialization is deterministic UTF-8 canonical JSON with sorted keys and no insignificant whitespace' "$surface"
+  grep -Fq 'Any packet field, revision, artifact, or hash change invalidates acceptance and requires a new packet/hash and human acceptance' "$surface"
+  grep -Fq '`accepted_source_fingerprint` is an ephemeral canonical hash for the exact `checkpoint_scope`' "$surface"
+  grep -Fq 'deterministic sorted/null-safe records' "$surface"
+  grep -Fq 'staged/unstaged/untracked inventory entries are filtered to the exact `checkpoint_scope`' "$surface"
+  grep -Fq 'Out-of-scope verifier artifacts, logs, and screenshots are excluded from `accepted_source_fingerprint` and do not invalidate acceptance' "$surface"
+  grep -Fq 'Any HEAD/index/worktree/untracked/staged content change inside the exact `checkpoint_scope` invalidates acceptance.' "$surface"
+  grep -Fq 'Git status/diff are supplementary before/after evidence, not the fingerprint' "$surface"
+done
+
+# The PR checklist must not authorize video merely because it may aid review.
+assert_absent 'safe screenshots/video only when they materially aid review' "$DELIVERY"
+assert_absent 'video (generation|creation|attachment|link).*materially aid review' "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md"
+grep -Fq 'video generation, attachment, or link is permitted only after an explicit video/evidence request' "$DELIVERY"
+
+for surface in "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md" "$VERIFIER"; do
+  assert_absent 'Verifier technical verification: only after the Coordinator packet' "$surface"
+  grep -Fq 'For non-UI checkpoints, after `checkpoint_token`/`checkpoint_scope` and implementer pause, no Coordinator browser packet, human UI acceptance, or `accepted_source_fingerprint` is required' "$surface"
+done
+
+grep -Fq 'The default packet records exact selector `iab` and family `iab`.' "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md" "$IMPLEMENTER" "$VERIFIER"
+grep -Fq 'an approved Chrome/Edge exception additionally includes `exception_reason`, `user_approval_evidence`, and `matching_family`.' "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md" "$IMPLEMENTER" "$VERIFIER"
+grep -Fq 'The packet records `automatic_fallback=false`.' "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md" "$IMPLEMENTER" "$VERIFIER"
+grep -Fq 'The human reviews that exact `browser_evidence_hash`.' "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md" "$IMPLEMENTER" "$VERIFIER"
+grep -Fq 'The final acceptance envelope is immutable and repeats the packet/hash plus human evidence explicitly referencing the same hash.' "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md" "$IMPLEMENTER" "$VERIFIER"
+grep -Fq 'verifier recomputes `browser_evidence_hash` and rejects a mismatch.' "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md" "$IMPLEMENTER" "$VERIFIER"
+
+for surface in "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md"; do
+  grep -Fq 'For user-visible UI, the Coordinator/main context is the browser executor and owner: it runs the visual/interactive checks and records the `coordinator_browser_evidence` packet.' "$surface"
+  grep -Fq 'For user-visible UI only, before human acceptance the Coordinator freezes one canonical `coordinator_browser_evidence` packet' "$surface"
+  grep -Fq 'The final acceptance envelope is immutable and repeats the packet/hash plus human evidence explicitly referencing the same hash.' "$surface"
+  grep -Fq 'Any packet field, revision, artifact, or hash change invalidates acceptance and requires a new packet/hash and human acceptance' "$surface"
+  grep -Fq 'If Coordinator/main cannot obtain the approved browser surface for user-visible UI, stop and report IAB unavailable/blocker; verifier-side browser unavailability alone is non-blocking when the valid packet and human acceptance are present.' "$surface"
+done
+
+grep -Fq 'Coordinator/main is the browser executor and owner' "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md"
+grep -Fq 'The implementer owns runnable setup/start, browser plan, and checkpoint state; if its own browser surface is unavailable, it must not fabricate browser execution.' "$IMPLEMENTER"
+assert_wrapped_phrase 'return its visual/interactive findings to the same saved implementer loop for micro-adjustments' "$IMPLEMENTER"
+grep -Fq 'Do not acquire, share, or rerun the Coordinator IAB session.' "$VERIFIER"
+grep -Fq 'Validate the `coordinator_browser_evidence` packet read-only' "$VERIFIER"
+grep -Fq 'Verifier-side IAB unavailability alone is non-blocking when the packet and human acceptance are valid.' "$VERIFIER"
+assert_wrapped_phrase 'run the bounded targeted tests, analyze their logs/output, and run objective non-browser checks' "$VERIFIER"
+grep -Fq 'A missing, mismatched, or source-drifted packet invalidates verifier evidence.' "$VERIFIER"
+assert_absent 'verifier_luna.*(must|required).*agent\.browsers\.get\("iab"\)|verifier.*(must|required).*acquire.*IAB session|verifier.*(must|required).*rerun.*IAB session' "$VERIFIER"
+
+# Human acceptance remains tied to the exact Coordinator-owned checkpoint packet.
+for surface in "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md"; do
+  grep -Fq 'Human combined appearance and primary-behavior acceptance applies to the same Coordinator checkpoint and its `coordinator_browser_evidence` packet.' "$surface"
+  grep -Fq 'The Coordinator records that packet and human acceptance as the final UI acceptance evidence, tied to' "$surface"
+done
+
+# PR evidence is produced/referenced by Coordinator browser execution and validated read-only by verifier.
+grep -Fq 'The Coordinator/main captures or references the local raw recording from its browser evidence packet.' "$POLICY" "$AGENTS" "$DELIVERY"
+assert_wrapped_phrase 'verifier_luna validates the packet, artifact identifiers/hashes, and source integrity read-only; it does not acquire or rerun the IAB session.' "$POLICY" "$AGENTS" "$DELIVERY" "$VERIFIER"
+assert_absent 'verifier_luna (performs|captures).*browser behavior|verifier_luna.*(must|required|shall|should).*acquire.*IAB|verifier_luna.*(must|required|shall|should).*rerun.*IAB' "$POLICY" "$AGENTS" "$DELIVERY" "$VERIFIER"
 
 # Threat-model/supported-use declaration is immutable review-context evidence.
 for surface in "$POLICY" "$DELIVERY" "$AGENTS"; do
@@ -471,9 +655,9 @@ assert_absent 'review_context_key = acceptance_criteria + risk + target_files' "
 assert_absent 'packets omit the threat model' "$POLICY" "$DELIVERY" "$AGENTS"
 
 assert_sequence "$VERIFIER" \
-  'Before human acceptance for a user-visible UI change, verifier may only run non-mutating baseline, test-map, log-shape, or browser-plan checks.' \
-  'Only after the Coordinator records human UI/behavior acceptance evidence tied to checkpoint_token and checkpoint_scope may verifier perform final browser behavior verification or capture a recording.' \
-  'Repeat the accepted_source_fingerprint comparison in before/after evidence.'
+  'For user-visible UI only, before human acceptance, verifier may run only non-mutating baseline, test-map, log-shape, or browser-plan checks.' \
+  'For user-visible UI only, only after the Coordinator records human UI/behavior acceptance evidence tied to checkpoint_token and checkpoint_scope and provides a valid `coordinator_browser_evidence` packet may verifier proceed.' \
+  'Validate the `coordinator_browser_evidence` packet read-only.'
 
 grep -Fq 'PR evidence skill link/unlink test passed.' <(bash "$ROOT/tests/setup-skills.sh")
 [[ -d "$PR_EVIDENCE_SKILL" ]] || { printf 'PR evidence skill directory missing.\n' >&2; exit 1; }

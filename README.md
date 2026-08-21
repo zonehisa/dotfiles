@@ -43,11 +43,14 @@ chmod +x setup.sh
 
 `init` は `LINKS` に定義された対象だけを `~/` からこの repo へコピーします。既に repo 側にあるファイルは上書きしません。
 
-Codexの設定とSkillsは次へリンクされます。
+Codex の Skills と設定ファイルは次のパスへシンボリックリンクされます。Codex CLI の互換性のため、5つの custom agent TOML だけはシンボリックリンクではなく、repo と byte-identical な通常ファイルとしてホームへコピーされます。コピーの所有判定用に隣接する `.dotfiles-managed` marker を作成し、`unlink` 時に削除します。この suffix は setup 専用の予約済み metadata として扱ってください。agent TOML や Skills の更新を pull した後は `./setup.sh link-codex` を再実行してください（通常の `link`/引数なしの `all` でも同じ配置になります）。
 
 - `codex/skills/parallel-worktree` → `~/.agents/skills/parallel-worktree`
 - `codex/skills/git-workflow` → `~/.codex/skills/git-workflow`
 - `codex/skills/pr-evidence-video` → `~/.codex/skills/pr-evidence-video`
+
+通常ファイルとしてコピーされる custom agent TOML:
+
 - `codex/agents/implementer-luna.toml` → `~/.codex/agents/implementer-luna.toml`
 - `codex/agents/explorer-luna.toml` → `~/.codex/agents/explorer-luna.toml`
 - `codex/agents/verifier-luna.toml` → `~/.codex/agents/verifier-luna.toml`
@@ -126,10 +129,10 @@ change itself is non-user-visible and uses `Not required (non-user-visible chang
 ```
 
 - `init`: ホーム配下の設定を repo にコピー
-- `link`: repo からホーム配下へシンボリックリンクを作成
-- `unlink`: `link` で作成したシンボリックリンクを外し、最新のバックアップがあれば復元
-- `link-codex`: Codex/agent/skill のみをホームへリンク（WSL2 向け）
-- `unlink-codex`: `link-codex` のリンクを解除し、最新のバックアップがあれば復元
+- `link`: repo からホーム配下へシンボリックリンクを作成し、custom agent TOML は通常ファイルとしてコピー
+- `unlink`: `link` のリンク/agent コピーを解除し、最新のバックアップがあれば復元
+- `link-codex`: Codex/agent/skill のみをホームへ配置（Skills/設定はリンク、agent TOML はコピー。WSL2 向け）
+- `unlink-codex`: `link-codex` のリンク/agent コピーを解除し、最新のバックアップがあれば復元
 - 引数なし: `init` → `link`
 
 ### WSL2
@@ -159,8 +162,8 @@ cd ~/code/dotfiles
 ./setup.sh link-codex
 ```
 
-戻す場合は `./setup.sh unlink-codex` を実行します。既存の `init`、`link`、`unlink`、引数なし
-の `init → link` は従来どおりです。
+戻す場合は `./setup.sh unlink-codex` を実行します。`init`、`link`、`unlink`、引数なしの
+`init → link` でも、custom agent TOML は同じ通常ファイルのコピー契約に従います。
 
 WSL2 環境の依存確認と契約テスト（実際の WSL2 runtime や browser render を成功済みとは
 主張しません）のコマンド:

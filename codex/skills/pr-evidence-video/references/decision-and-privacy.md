@@ -24,11 +24,20 @@ Fail closed when any of the following is true:
 
 Raw and Remotion output are normalized with ffmpeg to a 1280×720 H.264 MP4 with yuv420p,
 `-movflags +faststart`, and no audio. Privacy and evidence review are separate statuses; an upload
-handoff is not evidence approval. Remotion's `npm ci --ignore-scripts` uses only a private relative
-`.npm-cache` directory inside the disposable run. On macOS, `sandbox-exec` limits npm writes to that
-run; unsupported platforms fail closed rather than using an unsafe pathname cache. The cache is
-removed after rendering and may require network/tool approval each time. Before evidence materialization, an executable local Chrome/Chromium
+handoff is not evidence approval. Remotion's `npm ci --ignore-scripts` uses only a private
+`.npm-cache` directory inside the disposable run. On Darwin, `sandbox-exec` limits npm writes to that
+run. On Linux/WSL2, `bubblewrap >= 0.10.0` (`bwrap`, with `--bind-fd`) exposes the host root read-only, shares the network, and
+uses FD-bound mounts for the disposable run, template, and cache at fixed namespace paths. `HOME`,
+`TMPDIR`, npm cache, and npm user config remain inside the run. WSL1, unsupported platforms, missing
+sandbox binaries, or unsafe descriptor/mount operations fail closed rather than using an unsafe
+pathname cache. The cache is removed after rendering and may require network/tool approval each time.
+Keep WSL2 repos under `~/code` rather than `/mnt/c`; `setup.sh link-codex` warns for `/mnt/*` checkouts,
+and the renderer stops before materialization if that filesystem cannot satisfy the safe boundary.
+Before evidence materialization, an executable local Chrome/Chromium
 path is resolved from the config, environment, or conservative OS allowlist and passed with
 `--browser-executable`; missing or unsafe browsers fail closed, so browser downloads cannot inspect
 local evidence. The copied template, npm cache, recordings, props, and outputs remain in the
 disposable run and never enter the application checkout.
+
+Linux/WSL2 uses the fixed system-owned `/usr/bin/bwrap`, `/usr/bin/npm`, and `/usr/bin/npx` paths;
+caller-controlled `PATH` entries cannot replace the sandbox or render executables.

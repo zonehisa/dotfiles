@@ -29,6 +29,11 @@ LINKS=(
   ".config/gh/config.yml:.config/gh/config.yml"
   "Library/Application Support/lazygit/config.yml:.config/lazygit/config.yml"
   "raycast-scripts:raycast-scripts"
+)
+
+# Codex/agent/skill paths are kept separate so WSL2 can opt into only these links without
+# touching macOS shell, Homebrew, desktop-app, or other host-specific configuration.
+CODEX_LINKS=(
   ".agents/skills/parallel-worktree:codex/skills/parallel-worktree"
   ".codex/AGENTS.md:codex/AGENTS.md"
   ".codex/agents/implementer-luna.toml:codex/agents/implementer-luna.toml"
@@ -39,6 +44,8 @@ LINKS=(
   ".codex/skills/git-workflow:codex/skills/git-workflow"
   ".codex/skills/pr-evidence-video:codex/skills/pr-evidence-video"
 )
+
+LINKS+=("${CODEX_LINKS[@]}")
 
 # nvim (ディレクトリごとコピー/リンク)
 NVIM_FILES=(
@@ -94,6 +101,12 @@ ok()    { echo -e "\033[1;32m[OK]\033[0m   $*"; }
 warn()  { echo -e "\033[1;33m[WARN]\033[0m $*"; }
 err()   { echo -e "\033[1;31m[ERR]\033[0m  $*"; }
 
+warn_if_wsl_windows_mount() {
+  if [[ "$DOTFILES_DIR" == /mnt/* ]] && [[ -r /proc/version ]] && grep -qi microsoft /proc/version; then
+    warn "WSL2では repo を /mnt/c 配下に置かないでください（推奨: ~/code）。DrvFS の symlink/mount 差異により PR evidence は安全境界を作れず fail closed する場合があります。"
+  fi
+}
+
 # ---- init: 設定ファイルを dotfiles にコピー ----
 do_init() {
   info "設定ファイルを $DOTFILES_DIR にコピーします..."
@@ -135,10 +148,21 @@ do_init() {
 }
 
 # ---- link: シンボリックリンクを作成 ----
-do_link() {
-  info "シンボリックリンクを作成します..."
+do_link_scope() {
+  local scope="$1"
+  local entry
+  local -a entries
 
-  for entry in "${LINKS[@]}"; do
+  if [[ "$scope" == "codex" ]]; then
+    entries=("${CODEX_LINKS[@]}")
+    warn_if_wsl_windows_mount
+    info "Codex/agent/skill のシンボリックリンクを作成します..."
+  else
+    entries=("${LINKS[@]}")
+    info "シンボリックリンクを作成します..."
+  fi
+
+  for entry in "${entries[@]}"; do
     target="$DOTFILES_DIR/${entry##*:}"
     link_path="$HOME/${entry%%:*}"
 
@@ -164,16 +188,33 @@ do_link() {
     ok "リンク: $link_path → $target"
   done
 
-  info "link 完了！新しいターミナルを開いて動作確認してください。"
+  if [[ "$scope" == "codex" ]]; then
+    info "link-codex 完了！Codex/agent/skill のみをリンクしました。"
+  else
+    info "link 完了！新しいターミナルを開いて動作確認してください。"
+  fi
 }
 
+do_link() { do_link_scope all; }
+do_link_codex() { do_link_scope codex; }
+
 # ---- unlink: シンボリックリンクを解除してバックアップを復元 ----
-do_unlink() {
-  info "シンボリックリンクを解除します..."
+do_unlink_scope() {
+  local scope="$1"
+  local entry
+  local -a entries
+
+  if [[ "$scope" == "codex" ]]; then
+    entries=("${CODEX_LINKS[@]}")
+    info "Codex/agent/skill のシンボリックリンクを解除します..."
+  else
+    entries=("${LINKS[@]}")
+    info "シンボリックリンクを解除します..."
+  fi
 
   local latest_bak candidate
 
-  for entry in "${LINKS[@]}"; do
+  for entry in "${entries[@]}"; do
     link_path="$HOME/${entry%%:*}"
     target="$DOTFILES_DIR/${entry##*:}"
 
@@ -198,24 +239,35 @@ do_unlink() {
     fi
   done
 
-  info "unlink 完了！"
+  if [[ "$scope" == "codex" ]]; then
+    info "unlink-codex 完了！"
+  else
+    info "unlink 完了！"
+  fi
 }
+
+do_unlink() { do_unlink_scope all; }
+do_unlink_codex() { do_unlink_scope codex; }
 
 # ---- メイン ----
 case "${1:-all}" in
   init)   do_init ;;
   link)   do_link ;;
   unlink) do_unlink ;;
+  link-codex) do_link_codex ;;
+  unlink-codex) do_unlink_codex ;;
   all)
     do_init
     echo ""
     do_link
     ;;
   *)
-    echo "使い方: $0 {init|link|unlink|all}"
+    echo "使い方: $0 {init|link|unlink|link-codex|unlink-codex|all}"
     echo "  init   - 設定ファイルを dotfiles にコピー"
     echo "  link   - シンボリックリンクを作成"
     echo "  unlink - シンボリックリンクを解除しバックアップを復元"
+    echo "  link-codex - Codex/agent/skill のみをホームへリンク"
+    echo "  unlink-codex - link-codex のリンクを解除しバックアップを復元"
     echo "  all    - init + link を実行（デフォルト）"
     exit 1
     ;;

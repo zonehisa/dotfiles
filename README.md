@@ -1,6 +1,7 @@
 # dotfiles
 
-macOS を主対象にした開発環境設定のリポジトリです。
+macOS を主対象にしつつ、Codex/agent/skill と PR evidence workflow は WSL2 でも利用できる
+開発環境設定のリポジトリです。
 
 ## 含まれるもの
 
@@ -119,13 +120,64 @@ change itself is non-user-visible and uses `Not required (non-user-visible chang
 ./setup.sh init
 ./setup.sh link
 ./setup.sh unlink
+./setup.sh link-codex
+./setup.sh unlink-codex
 ./setup.sh
 ```
 
 - `init`: ホーム配下の設定を repo にコピー
 - `link`: repo からホーム配下へシンボリックリンクを作成
 - `unlink`: `link` で作成したシンボリックリンクを外し、最新のバックアップがあれば復元
+- `link-codex`: Codex/agent/skill のみをホームへリンク（WSL2 向け）
+- `unlink-codex`: `link-codex` のリンクを解除し、最新のバックアップがあれば復元
 - 引数なし: `init` → `link`
+
+### WSL2
+
+Codex 0.115 以降の Linux 実行環境として WSL2 をサポートします。WSL1 は Linux の
+`bubblewrap` 境界を利用できないため対象外です。Windows 側の `/mnt/c` 配下ではなく、WSL2
+の Linux ホーム（例: `~/code/dotfiles`）へ clone してください。`/mnt/c` は DrvFS の権限・
+symlink・mount の挙動が異なるため、`link-codex` は警告を出し、PR evidence renderer は安全な
+FD/mount 境界を確立できない場合に evidence materialization 前に fail closed します。
+
+PR evidence の Remotion 実行には次の Linux 側依存が必要です。
+
+- `bubblewrap >= 0.10.0` (`bwrap`, with `--bind-fd`)
+- `node` / `npm` / `npx`
+- `ffmpeg` / `ffprobe`
+- WSLg 等から起動できる、既にインストール済みの Linux Chrome または Chromium
+
+セキュリティ境界に使う `bwrap`、`npm`、`npx` は caller の `PATH` ではなく、root-owned
+system path の `/usr/bin/bwrap`、`/usr/bin/npm`、`/usr/bin/npx` を使用します。これらを
+その場所に用意してください。
+
+WSL2 では macOS の shell、Homebrew、デスクトップアプリ設定をリンクせず、Codex/agent/skill
+だけを次で有効化します。
+
+```bash
+cd ~/code/dotfiles
+./setup.sh link-codex
+```
+
+戻す場合は `./setup.sh unlink-codex` を実行します。既存の `init`、`link`、`unlink`、引数なし
+の `init → link` は従来どおりです。
+
+WSL2 環境の依存確認と契約テスト（実際の WSL2 runtime や browser render を成功済みとは
+主張しません）のコマンド:
+
+```bash
+set -e
+for tool in /usr/bin/bwrap /usr/bin/npm /usr/bin/npx; do test -x "$tool"; done
+for tool in node ffmpeg ffprobe; do command -v "$tool" >/dev/null; done
+/usr/bin/bwrap --help | grep -F -- --bind-fd >/dev/null
+command -v google-chrome || command -v chromium || command -v chromium-browser
+python3 -m unittest codex/skills/pr-evidence-video/tests/test_render_pr_evidence.py -v
+```
+
+Remotion の実行時は `bwrap --ro-bind / / --share-net` を使い、disposable run だけを writable
+mount として FD-bound に渡します。`HOME`、`TMPDIR`、npm cache は run 内に固定されます。
+`bwrap`、local browser、または安全な mount/descriptor 境界がない場合は、入力録画を run に
+materialize せず停止します。
 
 ## Homebrew
 

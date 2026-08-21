@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -37,6 +38,11 @@ REMOTION_INSTALL_TIMEOUT_SECONDS = 300
 REMOTION_RENDER_TIMEOUT_SECONDS = 300
 REMOTION_VIDEO_BITRATE = "2M"
 REMOTION_CONCURRENCY = "1"
+BUBBLEWRAP_NAMESPACE_ROOT = "/var/tmp"
+BUBBLEWRAP_EXECUTABLE = Path("/usr/bin/bwrap")
+LINUX_NPM_EXECUTABLE = Path("/usr/bin/npm")
+LINUX_NPX_EXECUTABLE = Path("/usr/bin/npx")
+LINUX_SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".webm"}
 HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 REPOSITORY_RE = re.compile(r"^[^/\s]+/[^/\s]+$")
@@ -103,6 +109,43 @@ class RemotionPlan:
     public_dir: Path
     duration_in_frames: int
     repo_root: Optional[Path] = None
+
+
+@dataclass
+class RemotionDescriptors:
+    """Retained no-follow descriptors for one disposable Remotion workspace."""
+
+    run_fd: Optional[int]
+    template_fd: Optional[int]
+    public_fd: Optional[int]
+    cache_fd: Optional[int]
+    home_fd: Optional[int]
+    tmp_fd: Optional[int]
+    input_fds: Tuple[int, ...] = ()
+
+    def pass_fds(self) -> Tuple[int, ...]:
+        return tuple(
+            fd
+            for fd in (
+                self.run_fd,
+                self.template_fd,
+                self.public_fd,
+                self.cache_fd,
+                self.home_fd,
+                self.tmp_fd,
+            )
+            if fd is not None
+        )
+
+    def close(self) -> None:
+        for name in ("public_fd", "cache_fd", "home_fd", "tmp_fd", "template_fd", "run_fd"):
+            fd = getattr(self, name)
+            if fd is not None:
+                _close_fd(fd)
+                setattr(self, name, None)
+        for fd in self.input_fds:
+            _close_fd(fd)
+        self.input_fds = ()
 
 
 def is_within(path: Path, parent: Path) -> bool:
@@ -571,6 +614,124 @@ def _open_bound_directory(path: Path, *, create: bool = False, label: str = "dir
         raise
 
 
+def _open_bound_child_directory(
+    parent_fd: int,
+    name: str,
+    *,
+    create: bool = False,
+    label: str = "directory",
+) -> int:
+    """Open or create one no-follow directory below an already-bound parent descriptor."""
+
+    if not name or name in {".", ".."} or "/" in name or os.sep in name:
+        raise RenderError(f"{label} name must be one path component")
+    flags = _directory_open_flags()
+    try:
+        return os.open(name, flags, dir_fd=parent_fd)
+    except FileNotFoundError:
+        if not create:
+            raise RenderError(f"{label} does not exist: {name}")
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+            return os.open(name, flags, dir_fd=parent_fd)
+        except OSError as exc:
+            raise RenderError(f"could not create/open {label} without following symlinks: {exc}") from exc
+    except OSError as exc:
+        raise RenderError(f"could not open {label} without following symlinks: {exc}") from exc
+
+
+def _open_bound_file(parent_fd: int, name: str, *, flags: int, label: str, mode: int = 0o600) -> int:
+    """Open one regular file below a retained directory descriptor without following links."""
+
+    if not name or name in {".", ".."} or "/" in name or os.sep in name:
+        raise RenderError(f"{label} name must be one path component")
+    file_fd: Optional[int] = None
+    try:
+        file_fd = os.open(name, flags | os.O_NOFOLLOW, mode, dir_fd=parent_fd)
+        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+            _close_fd(file_fd)
+            file_fd = None
+            raise RenderError(f"{label} is not a regular file: {name}")
+        return file_fd
+    except RenderError:
+        raise
+    except OSError as exc:
+        _close_fd(file_fd)
+        raise RenderError(f"could not open {label} without following symlinks: {exc}") from exc
+
+
+def _open_bound_path_file(path: Path, *, label: str) -> int:
+    """Open a validated absolute file path by binding its parent before the final lookup."""
+
+    parent_fd = _open_bound_directory(path.parent, create=False, label=f"{label} parent directory")
+    try:
+        return _open_bound_file(parent_fd, path.name, flags=os.O_RDONLY, label=label)
+    finally:
+        _close_fd(parent_fd)
+
+
+def _write_bound_text(parent_fd: int, name: str, text: str, *, label: str = "file") -> None:
+    file_fd: Optional[int] = None
+    try:
+        file_fd = _open_bound_file(
+            parent_fd,
+            name,
+            flags=os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            label=label,
+        )
+        with os.fdopen(file_fd, "w", encoding="utf-8") as stream:
+            file_fd = None
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except OSError as exc:
+        raise RenderError(f"could not write {label}: {exc}") from exc
+    finally:
+        _close_fd(file_fd)
+
+
+def _copy_file_to_bound_directory(
+    source: Path,
+    parent_fd: int,
+    name: str,
+    *,
+    source_fd: Optional[int] = None,
+    label: str = "file",
+) -> None:
+    destination_fd: Optional[int] = None
+    try:
+        destination_fd = _open_bound_file(
+            parent_fd,
+            name,
+            flags=os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            label=label,
+        )
+        if source_fd is None:
+            source_stream = source.open("rb")
+        else:
+            os.lseek(source_fd, 0, os.SEEK_SET)
+            source_stream = os.fdopen(os.dup(source_fd), "rb")
+        with source_stream, os.fdopen(destination_fd, "wb") as destination_stream:
+            destination_fd = None
+            shutil.copyfileobj(source_stream, destination_stream)
+            destination_stream.flush()
+            os.fsync(destination_stream.fileno())
+    except OSError as exc:
+        raise RenderError(f"could not materialize {label}: {exc}") from exc
+    finally:
+        _close_fd(destination_fd)
+
+
+def _fd_path(file_descriptor: int) -> Path:
+    """Return a child-visible path for an already-retained file descriptor."""
+
+    if sys.platform.startswith("linux"):
+        return Path(f"/proc/self/fd/{file_descriptor}")
+    if sys.platform == "darwin":
+        return Path(f"/dev/fd/{file_descriptor}")
+    raise RenderError("descriptor-backed external commands require Linux or macOS")
+
+
 def _canonical_system_alias(path: Path) -> Path:
     """Canonicalize only the OS-provided temporary aliases before no-follow walking."""
 
@@ -622,17 +783,317 @@ def _npm_sandbox_profile(run_dir: Path) -> str:
     )
 
 
-def _sandbox_npm_command(plan: RemotionPlan, command: Sequence[str]) -> List[str]:
-    """Wrap npm with a write sandbox; other platforms fail closed rather than race a pathname."""
+def _trusted_linux_binary(name: str) -> Path:
+    paths = {
+        "npm": LINUX_NPM_EXECUTABLE,
+        "npx": LINUX_NPX_EXECUTABLE,
+    }
+    path = paths.get(name)
+    if path is None:
+        raise RenderError(f"unsupported trusted Linux executable: {name}")
+    if not path.is_file() or not os.access(str(path), os.X_OK):
+        raise RenderError(f"trusted Linux executable is unavailable: {path}")
+    return path
 
-    if sys.platform != "darwin":
-        raise RenderError(
-            "safe private npm-cache writes require macOS sandbox-exec; this platform is unsupported"
+
+def _kernel_osrelease() -> str:
+    try:
+        return Path("/proc/sys/kernel/osrelease").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _reject_wsl1() -> None:
+    release = _kernel_osrelease().lower()
+    if "microsoft" in release and "wsl2" not in release:
+        raise RenderError("WSL1 is unsupported; use WSL2 with bubblewrap >= 0.10.0")
+
+
+def _bubblewrap_path() -> Path:
+    path = Path(BUBBLEWRAP_EXECUTABLE)
+    if not path.is_file() or not os.access(str(path), os.X_OK):
+        raise RenderError(f"trusted bubblewrap executable is unavailable: {path}")
+    try:
+        version_result = subprocess.run(
+            [str(path), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
-    sandbox = Path("/usr/bin/sandbox-exec")
-    if not sandbox.is_file() or not os.access(str(sandbox), os.X_OK):
-        raise RenderError("/usr/bin/sandbox-exec is required to protect the private npm cache")
-    return [str(sandbox), "-p", _npm_sandbox_profile(plan.run_dir), *command]
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RenderError(f"could not inspect bubblewrap version: {path}: {exc}") from exc
+    version_text = f"{version_result.stdout or ''}\n{version_result.stderr or ''}"
+    if version_result.returncode != 0:
+        details = (version_result.stderr or version_result.stdout or "").strip()
+        suffix = f": {details}" if details else ""
+        raise RenderError(f"bubblewrap version probe failed for {path}{suffix}")
+    version_match = re.search(r"(?:bubblewrap|bwrap)\s+v?(\d+)\.(\d+)(?:\.(\d+))?", version_text, re.IGNORECASE)
+    if version_match is None:
+        raise RenderError(f"could not parse bubblewrap version from {path}")
+    version = tuple(int(part or 0) for part in version_match.groups())
+    if version < (0, 10, 0):
+        raise RenderError(f"bubblewrap >= 0.10.0 is required; found {version[0]}.{version[1]}.{version[2]}")
+    try:
+        help_result = subprocess.run(
+            [str(path), "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RenderError(f"could not inspect bubblewrap capabilities: {path}: {exc}") from exc
+    help_text = f"{help_result.stdout or ''}\n{help_result.stderr or ''}"
+    if help_result.returncode != 0:
+        details = (help_result.stderr or help_result.stdout or "").strip()
+        suffix = f": {details}" if details else ""
+        raise RenderError(f"bubblewrap capability probe failed for {path}{suffix}")
+    if "--bind-fd" not in help_text:
+        raise RenderError("bubblewrap >= 0.10.0 with --bind-fd is required to protect the private npm cache")
+    return path
+
+
+def _bubblewrap_fd_command(
+    command: Sequence[str],
+    *,
+    run_fd: int,
+    template_fd: int,
+    cache_fd: int,
+    home_fd: Optional[int] = None,
+    tmp_fd: Optional[int] = None,
+) -> List[str]:
+    """Build a Linux command with descriptor-bound disposable writable mounts."""
+
+    namespace_root = BUBBLEWRAP_NAMESPACE_ROOT
+    template_root = f"{namespace_root}/template"
+    cache_root = f"{namespace_root}/npm-cache"
+    home_root = f"{namespace_root}/home"
+    tmp_root = f"{namespace_root}/tmp"
+    path_value = LINUX_SYSTEM_PATH
+    if home_fd is None or tmp_fd is None:
+        raise RenderError("Linux bubblewrap requires bound disposable HOME and TMPDIR descriptors")
+    bubblewrap = _bubblewrap_path()
+    mount_root_fd: Optional[int] = None
+    try:
+        mount_root_fd = _open_bound_directory(
+            Path(namespace_root), create=False, label="bubblewrap disposable mount root"
+        )
+    finally:
+        _close_fd(mount_root_fd)
+    return [
+        str(bubblewrap),
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-user",
+        "--disable-userns",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--cap-drop",
+        "ALL",
+        "--ro-bind",
+        "/",
+        "/",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--bind-fd",
+        str(run_fd),
+        namespace_root,
+        "--bind-fd",
+        str(template_fd),
+        template_root,
+        "--bind-fd",
+        str(cache_fd),
+        cache_root,
+        "--bind-fd",
+        str(home_fd),
+        home_root,
+        "--bind-fd",
+        str(tmp_fd),
+        tmp_root,
+        "--share-net",
+        "--clearenv",
+        "--setenv",
+        "PATH",
+        path_value,
+        "--setenv",
+        "HOME",
+        home_root,
+        "--setenv",
+        "TMPDIR",
+        tmp_root,
+        "--setenv",
+        "TMP",
+        tmp_root,
+        "--setenv",
+        "TEMP",
+        tmp_root,
+        "--setenv",
+        "XDG_CONFIG_HOME",
+        f"{home_root}/.config",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        f"{home_root}/.cache",
+        "--setenv",
+        "NPM_CONFIG_CACHE",
+        cache_root,
+        "--setenv",
+        "npm_config_cache",
+        cache_root,
+        "--setenv",
+        "NPM_CONFIG_USERCONFIG",
+        f"{home_root}/.npmrc",
+        "--setenv",
+        "npm_config_userconfig",
+        f"{home_root}/.npmrc",
+        "--setenv",
+        "npm_config_prefix",
+        f"{namespace_root}/npm-prefix",
+        "--setenv",
+        "PWD",
+        template_root,
+        "--chdir",
+        template_root,
+        "--",
+        *command,
+    ]
+
+
+def _bubblewrap_npm_command(
+    plan: RemotionPlan,
+    command: Sequence[str],
+    *,
+    run_fd: int,
+    template_fd: int,
+    cache_fd: int,
+    home_fd: Optional[int] = None,
+    tmp_fd: Optional[int] = None,
+) -> List[str]:
+    """Build the Linux npm install command inside the descriptor-bound run."""
+
+    del plan  # The plan's paths are intentionally not used as bind sources after FD validation.
+    if not command or Path(command[0]).name != "npm":
+        raise RenderError("Linux bubblewrap requires an npm install command")
+    trusted_npm = _trusted_linux_binary("npm")
+    return _bubblewrap_fd_command(
+        [str(trusted_npm), *command[1:]],
+        run_fd=run_fd,
+        template_fd=template_fd,
+        cache_fd=cache_fd,
+        home_fd=home_fd,
+        tmp_fd=tmp_fd,
+    )
+
+
+def _bubblewrap_remotion_command(
+    plan: RemotionPlan,
+    command: Sequence[str],
+    *,
+    run_fd: int,
+    template_fd: int,
+    cache_fd: int,
+    home_fd: Optional[int] = None,
+    tmp_fd: Optional[int] = None,
+) -> List[str]:
+    """Build the Linux Remotion render command inside the descriptor-bound run."""
+
+    if not command or Path(command[0]).name != "npx":
+        raise RenderError("Linux bubblewrap requires an npx Remotion render command")
+    trusted_npx = _trusted_linux_binary("npx")
+    namespace_root = BUBBLEWRAP_NAMESPACE_ROOT
+    path_map = {
+        str(plan.entrypoint): f"{namespace_root}/template/src/index.ts",
+        str(plan.output_path): f"{namespace_root}/remotion-output.mp4",
+        str(plan.props_path): f"{namespace_root}/props.json",
+    }
+    translated = [str(trusted_npx)]
+    translated.extend(path_map.get(str(argument), str(argument)) for argument in command[1:])
+    return _bubblewrap_fd_command(
+        translated,
+        run_fd=run_fd,
+        template_fd=template_fd,
+        cache_fd=cache_fd,
+        home_fd=home_fd,
+        tmp_fd=tmp_fd,
+    )
+
+
+def _sandbox_npm_command(
+    plan: RemotionPlan,
+    command: Sequence[str],
+    *,
+    run_fd: Optional[int] = None,
+    template_fd: Optional[int] = None,
+    cache_fd: Optional[int] = None,
+    home_fd: Optional[int] = None,
+    tmp_fd: Optional[int] = None,
+) -> List[str]:
+    """Wrap npm with the platform's write sandbox, failing closed elsewhere."""
+
+    platform = getattr(sys, "platform", "")
+    if not isinstance(platform, str):
+        platform = str(platform)
+    if platform == "darwin":
+        sandbox = Path("/usr/bin/sandbox-exec")
+        if not sandbox.is_file() or not os.access(str(sandbox), os.X_OK):
+            raise RenderError("/usr/bin/sandbox-exec is required to protect the private npm cache")
+        return [str(sandbox), "-p", _npm_sandbox_profile(plan.run_dir), *command]
+    if platform.startswith("linux"):
+        if run_fd is None or template_fd is None or cache_fd is None or home_fd is None or tmp_fd is None:
+            raise RenderError(
+                "Linux bubblewrap requires bound disposable run, template, cache, HOME, and TMPDIR descriptors"
+            )
+        return _bubblewrap_npm_command(
+            plan,
+            command,
+            run_fd=run_fd,
+            template_fd=template_fd,
+            cache_fd=cache_fd,
+            home_fd=home_fd,
+            tmp_fd=tmp_fd,
+        )
+    raise RenderError(
+        "safe private npm-cache writes require macOS sandbox-exec or Linux bubblewrap; this platform is unsupported"
+    )
+
+
+def _sandbox_remotion_command(
+    plan: RemotionPlan,
+    command: Sequence[str],
+    *,
+    run_fd: Optional[int] = None,
+    template_fd: Optional[int] = None,
+    cache_fd: Optional[int] = None,
+    home_fd: Optional[int] = None,
+    tmp_fd: Optional[int] = None,
+) -> List[str]:
+    """Wrap the Remotion render with the platform's execution boundary."""
+
+    platform = getattr(sys, "platform", "")
+    if not isinstance(platform, str):
+        platform = str(platform)
+    if platform == "darwin":
+        return list(command)
+    if platform.startswith("linux"):
+        if run_fd is None or template_fd is None or cache_fd is None or home_fd is None or tmp_fd is None:
+            raise RenderError(
+                "Linux bubblewrap requires bound disposable run, template, cache, HOME, and TMPDIR descriptors"
+            )
+        return _bubblewrap_remotion_command(
+            plan,
+            command,
+            run_fd=run_fd,
+            template_fd=template_fd,
+            cache_fd=cache_fd,
+            home_fd=home_fd,
+            tmp_fd=tmp_fd,
+        )
+    raise RenderError(
+        "safe Remotion rendering requires macOS or Linux bubblewrap; this platform is unsupported"
+    )
 
 
 def _detect_node_major() -> str:
@@ -755,6 +1216,8 @@ def build_ffmpeg_command(source: Path, destination: Path) -> List[str]:
         "tv",
         "-movflags",
         "+faststart",
+        "-f",
+        "mp4",
         str(destination),
     ]
     return command
@@ -815,11 +1278,15 @@ def _require_binary(name: str) -> None:
         raise RenderError(f"required executable is unavailable: {name}")
 
 
-def probe_media(path: Path) -> MediaInfo:
+def probe_media(path: Path, *, file_descriptor: Optional[int] = None) -> MediaInfo:
     """Inspect a normalized artifact with ffprobe."""
 
     _require_binary("ffprobe")
-    result = _run_external(build_ffprobe_command(path))
+    probe_path = _fd_path(file_descriptor) if file_descriptor is not None else path
+    result = _run_external(
+        build_ffprobe_command(probe_path),
+        pass_fds=(file_descriptor,) if file_descriptor is not None else (),
+    )
     try:
         payload = json.loads(result.stdout)
         streams = payload.get("streams") or []
@@ -881,7 +1348,7 @@ def _preflight_inputs(config: ValidatedConfig) -> Dict[Path, float]:
     return durations
 
 
-def validate_media(path: Path, info: MediaInfo) -> None:
+def validate_media(path: Path, info: MediaInfo, *, file_descriptor: Optional[int] = None) -> None:
     if info.codec != "h264":
         raise RenderError(f"artifact codec must be h264, got {info.codec!r}")
     if info.pixel_format != "yuv420p":
@@ -893,7 +1360,7 @@ def validate_media(path: Path, info: MediaInfo) -> None:
     if not (MIN_DURATION <= info.duration <= MAX_DURATION):
         raise RenderError(f"artifact duration must be between 1 and 60 seconds, got {info.duration}")
     try:
-        size = path.stat().st_size
+        size = os.fstat(file_descriptor).st_size if file_descriptor is not None else path.stat().st_size
     except OSError as exc:
         raise RenderError(f"cannot stat artifact: {exc}") from exc
     if size < 1 or size > MAX_BYTES:
@@ -925,7 +1392,12 @@ def _sha256_fd(fd: int) -> str:
     return digest.hexdigest()
 
 
-def _persist_artifact(source: Path, destination: Path, parent_fd: Optional[int] = None) -> Tuple[int, str]:
+def _persist_artifact(
+    source: Path,
+    destination: Path,
+    parent_fd: Optional[int] = None,
+    source_fd: Optional[int] = None,
+) -> Tuple[int, str]:
     """Persist an artifact through a bound output directory and return stable size/hash."""
 
     owned_fd = parent_fd is None
@@ -938,7 +1410,12 @@ def _persist_artifact(source: Path, destination: Path, parent_fd: Optional[int] 
     try:
         temporary_name, temporary_fd = _unique_directory_filename(directory_fd, destination.name)
         try:
-            with source.open("rb") as source_stream, os.fdopen(temporary_fd, "wb") as output_stream:
+            if source_fd is None:
+                source_stream = source.open("rb")
+            else:
+                os.lseek(source_fd, 0, os.SEEK_SET)
+                source_stream = os.fdopen(os.dup(source_fd), "rb")
+            with source_stream, os.fdopen(temporary_fd, "wb") as output_stream:
                 shutil.copyfileobj(source_stream, output_stream)
                 output_stream.flush()
                 os.fsync(output_stream.fileno())
@@ -971,8 +1448,29 @@ def _persist_artifact(source: Path, destination: Path, parent_fd: Optional[int] 
             _close_fd(directory_fd)
 
 
-def _normalize(source: Path, destination: Path) -> None:
+def _normalize(
+    source: Path,
+    destination: Path,
+    *,
+    source_fd: Optional[int] = None,
+    destination_fd: Optional[int] = None,
+) -> None:
     _require_binary("ffmpeg")
+    if (source_fd is None) != (destination_fd is None):
+        raise RenderError("descriptor-backed normalization requires both source and destination descriptors")
+    if source_fd is not None and destination_fd is not None:
+        source_path = _fd_path(source_fd)
+        destination_path = _fd_path(destination_fd)
+        _run_external(
+            build_ffmpeg_command(source_path, destination_path),
+            pass_fds=(source_fd, destination_fd),
+        )
+        try:
+            if os.fstat(destination_fd).st_size < 1:
+                raise RenderError(f"ffmpeg completed without creating {destination}")
+        except OSError as exc:
+            raise RenderError(f"ffmpeg completed without creating {destination}: {exc}") from exc
+        return
     _run_external(build_ffmpeg_command(source, destination))
     if not destination.is_file():
         raise RenderError(f"ffmpeg completed without creating {destination}")
@@ -1023,11 +1521,12 @@ def build_remotion_command(
     output: Path,
     props: Path,
     browser_executable: Path,
+    npx_executable: str = "npx",
 ) -> List[str]:
     """Return the fixed-template command; it never includes an install or upload operation."""
 
     return [
-        "npx",
+        npx_executable,
         "--no-install",
         "remotion",
         "render",
@@ -1053,9 +1552,12 @@ def build_remotion_command(
     ]
 
 
-def build_npm_ci_command(cache_dir: Path = Path(".npm-cache")) -> List[str]:
+def build_npm_ci_command(
+    cache_dir: Path = Path(".npm-cache"),
+    npm_executable: str = "npm",
+) -> List[str]:
     return [
-        "npm",
+        npm_executable,
         "ci",
         "--ignore-scripts",
         "--no-audit",
@@ -1103,8 +1605,21 @@ def prepare_remotion_run(
     except OSError as exc:
         raise RenderError(f"could not prepare fixed Remotion workspace: {exc}") from exc
     duration_in_frames = _duration_to_frames(duration if duration is not None else probe_duration(config.recording))
-    command = tuple(build_remotion_command(entrypoint, output_path, props_path, browser_executable))
-    install_command = tuple(build_npm_ci_command(Path(".npm-cache")))
+    platform = getattr(sys, "platform", "")
+    if not isinstance(platform, str):
+        platform = str(platform)
+    npx_executable = str(LINUX_NPX_EXECUTABLE) if platform.startswith("linux") else "npx"
+    npm_executable = str(LINUX_NPM_EXECUTABLE) if platform.startswith("linux") else "npm"
+    command = tuple(
+        build_remotion_command(
+            entrypoint,
+            output_path,
+            props_path,
+            browser_executable,
+            npx_executable=npx_executable,
+        )
+    )
+    install_command = tuple(build_npm_ci_command(Path(".npm-cache"), npm_executable=npm_executable))
     return RemotionPlan(
         run_dir,
         props_path,
@@ -1121,24 +1636,95 @@ def prepare_remotion_run(
     )
 
 
+def _open_remotion_descriptors(
+    plan: RemotionPlan,
+    input_paths: Sequence[Path] = (),
+) -> RemotionDescriptors:
+    """Open the complete disposable workspace before any evidence is materialized."""
+
+    descriptors = RemotionDescriptors(None, None, None, None, None, None)
+    try:
+        descriptors.run_fd = _open_bound_directory(
+            plan.run_dir,
+            create=False,
+            label="Remotion disposable run",
+        )
+        descriptors.template_fd = _open_bound_child_directory(
+            descriptors.run_fd,
+            "template",
+            create=False,
+            label="Remotion template directory",
+        )
+        descriptors.public_fd = _open_bound_child_directory(
+            descriptors.template_fd,
+            "public",
+            create=True,
+            label="Remotion public directory",
+        )
+        descriptors.cache_fd = _open_bound_child_directory(
+            descriptors.template_fd,
+            ".npm-cache",
+            create=True,
+            label="Remotion npm cache",
+        )
+        descriptors.home_fd = _open_bound_child_directory(
+            descriptors.run_fd,
+            "home",
+            create=True,
+            label="Remotion disposable HOME directory",
+        )
+        descriptors.tmp_fd = _open_bound_child_directory(
+            descriptors.run_fd,
+            "tmp",
+            create=True,
+            label="Remotion disposable TMPDIR",
+        )
+        input_fds: List[int] = []
+        for path in input_paths:
+            input_fds.append(_open_bound_path_file(path, label="Remotion input recording"))
+            descriptors.input_fds = tuple(input_fds)
+        return descriptors
+    except Exception:
+        descriptors.close()
+        raise
+
+
 def materialize_remotion_run(
     config: ValidatedConfig,
     plan: RemotionPlan,
     *,
     duration: Optional[float] = None,
     events: Optional[List[str]] = None,
+    descriptors: Optional[RemotionDescriptors] = None,
 ) -> None:
     """Copy only validated recordings and write deterministic props after dependency install."""
 
+    owns_descriptors = descriptors is None
+    if descriptors is None:
+        descriptors = _open_remotion_descriptors(plan)
     try:
-        plan.public_dir.mkdir(parents=True, exist_ok=True)
         primary_name = _asset_name(config.recording, "primary")
-        shutil.copyfile(str(config.recording), str(plan.public_dir / primary_name))
+        if descriptors.public_fd is None or descriptors.run_fd is None:
+            raise RenderError("Remotion descriptor bundle is closed before evidence materialization")
+        primary_source_fd = descriptors.input_fds[0] if descriptors.input_fds else None
+        _copy_file_to_bound_directory(
+            config.recording,
+            descriptors.public_fd,
+            primary_name,
+            source_fd=primary_source_fd,
+            label="primary evidence recording",
+        )
         secondary_name = None
         if config.comparison_recording is not None:
             secondary_name = _asset_name(config.comparison_recording, "secondary")
-            shutil.copyfile(str(config.comparison_recording), str(plan.public_dir / secondary_name))
-        plan.props_path.write_text(
+            _copy_file_to_bound_directory(
+                config.comparison_recording,
+                descriptors.public_fd,
+                secondary_name,
+                source_fd=descriptors.input_fds[1] if len(descriptors.input_fds) > 1 else None,
+                label="comparison evidence recording",
+            )
+        props_text = (
             json.dumps(
                 build_remotion_props(
                     config,
@@ -1152,46 +1738,97 @@ def materialize_remotion_run(
                 sort_keys=True,
                 indent=2,
             )
-            + "\n",
-            encoding="utf-8",
+            + "\n"
         )
+        if descriptors.run_fd is None:
+            raise RenderError("Remotion descriptor bundle is closed before props materialization")
+        _write_bound_text(descriptors.run_fd, "props.json", props_text, label="Remotion props")
     except OSError as exc:
         raise RenderError(f"could not materialize validated Remotion evidence: {exc}") from exc
+    finally:
+        if owns_descriptors:
+            descriptors.close()
     if events is not None:
         events.append("materialize")
 
 
-def _ensure_remotion_dependencies(plan: RemotionPlan) -> None:
+def _ensure_remotion_dependencies(
+    plan: RemotionPlan,
+    descriptors: Optional[RemotionDescriptors] = None,
+) -> None:
     # npm installs only into the copied temporary template. npx is invoked later with --no-install,
     # so rendering cannot silently download a different CLI or write into an application checkout.
-    _require_binary("npm")
-    _require_binary("npx")
-    if not plan.template_dir.is_dir() or not plan.entrypoint.is_file():
-        raise RenderError("fixed Remotion template is unavailable; complete the template step first")
-    if not (plan.template_dir / "package.json").is_file():
-        raise RenderError("fixed Remotion template package.json is unavailable; complete the template step first")
-    if not (plan.template_dir / "package-lock.json").is_file():
-        raise RenderError("fixed Remotion template package-lock.json is unavailable; generate the pinned lockfile first")
-    # The cache is private to this disposable run. Bind npm's cwd to the copied template directory
-    # descriptor and use a relative cache path. macOS sandbox-exec additionally denies npm writes
-    # outside the run even if an attacker swaps .npm-cache after the no-follow bind; no persistent
-    # cache survives cleanup.
-    template_fd = _open_bound_directory(plan.template_dir, create=False, label="Remotion template directory")
-    cache_fd = _open_bound_directory(plan.cache_dir, create=True, label="Remotion npm cache")
+    platform = getattr(sys, "platform", "")
+    if not isinstance(platform, str):
+        platform = str(platform)
+    npm_executable = "npm"
+    if platform.startswith("linux"):
+        _reject_wsl1()
+        npm_executable = str(_trusted_linux_binary("npm"))
+        _trusted_linux_binary("npx")
+    else:
+        _require_binary("npm")
+        _require_binary("npx")
+    owns_descriptors = descriptors is None
+    if descriptors is None:
+        descriptors = _open_remotion_descriptors(plan)
     try:
-        install_command = tuple(build_npm_ci_command(Path(".npm-cache")))
-        safe_install_command = _sandbox_npm_command(plan, install_command)
+        if descriptors.template_fd is None or descriptors.cache_fd is None or descriptors.run_fd is None:
+            raise RenderError("Remotion descriptor bundle is incomplete")
+        for filename, label in (
+            ("package.json", "fixed Remotion template package.json"),
+            ("package-lock.json", "fixed Remotion template package-lock.json"),
+        ):
+            file_fd = _open_bound_file(
+                descriptors.template_fd,
+                filename,
+                flags=os.O_RDONLY,
+                label=label,
+            )
+            _close_fd(file_fd)
+        source_fd = _open_bound_child_directory(
+            descriptors.template_fd,
+            "src",
+            create=False,
+            label="fixed Remotion template source directory",
+        )
+        try:
+            entrypoint_fd = _open_bound_file(
+                source_fd,
+                "index.ts",
+                flags=os.O_RDONLY,
+                label="fixed Remotion template entrypoint",
+            )
+            _close_fd(entrypoint_fd)
+        finally:
+            _close_fd(source_fd)
+        install_cache = Path("/var/tmp/npm-cache") if platform.startswith("linux") else Path(".npm-cache")
+        install_command = tuple(build_npm_ci_command(install_cache, npm_executable=npm_executable))
+        safe_install_command = _sandbox_npm_command(
+            plan,
+            install_command,
+            run_fd=descriptors.run_fd,
+            template_fd=descriptors.template_fd,
+            cache_fd=descriptors.cache_fd,
+            home_fd=descriptors.home_fd,
+            tmp_fd=descriptors.tmp_fd,
+        )
         _run_external(
             safe_install_command,
-            cwd_fd=template_fd,
+            cwd_fd=descriptors.template_fd,
             timeout=REMOTION_INSTALL_TIMEOUT_SECONDS,
-            pass_fds=(template_fd, cache_fd),
+            pass_fds=descriptors.pass_fds(),
         )
-        if not (plan.template_dir / "node_modules").is_dir():
-            raise RenderError("fixed Remotion dependencies are unavailable; install them only in the temporary run directory")
+        node_modules_fd = _open_bound_child_directory(
+            descriptors.template_fd,
+            "node_modules",
+            create=False,
+            label="fixed Remotion dependencies",
+        )
+        _close_fd(node_modules_fd)
     finally:
-        _close_fd(template_fd)
-        _close_fd(cache_fd)
+        if owns_descriptors:
+            descriptors.close()
 
 
 def _build_manifest(
@@ -1290,6 +1927,11 @@ def render(
         manifest_override=manifest_override,
         input_root_overrides=input_root_overrides,
     )
+    platform = getattr(sys, "platform", "")
+    if not isinstance(platform, str):
+        platform = str(platform)
+    if platform.startswith("linux"):
+        _reject_wsl1()
     input_durations = _preflight_inputs(validated)
     for path in (validated.artifact_path, validated.manifest_path):
         if path.exists() and not force:
@@ -1298,61 +1940,120 @@ def render(
     with tempfile.TemporaryDirectory(prefix="pr-evidence-video-", dir=str(temporary_parent)) as temporary_name:
         run_dir = Path(temporary_name)
         normalized = run_dir / "normalized.mp4"
-        if validated.mode == "raw":
-            _normalize(validated.recording, normalized)
-        else:
-            plan = prepare_remotion_run(
-                validated,
-                run_dir / "remotion",
-                duration=input_durations[validated.recording],
+        normalized_fd: Optional[int] = None
+        working_fd: Optional[int] = None
+        remotion_descriptors: Optional[RemotionDescriptors] = None
+        try:
+            if validated.mode == "raw":
+                _normalize(validated.recording, normalized)
+            else:
+                if platform.startswith("linux"):
+                    working_fd = _open_bound_directory(
+                        run_dir,
+                        create=False,
+                        label="Remotion normalization workspace",
+                    )
+                plan = prepare_remotion_run(
+                    validated,
+                    run_dir / "remotion",
+                    duration=input_durations[validated.recording],
+                )
+                # Open the complete descriptor bundle before npm or evidence writes. The same
+                # descriptors remain live through materialization, rendering, and normalization.
+                input_paths = [validated.recording]
+                if validated.comparison_recording is not None:
+                    input_paths.append(validated.comparison_recording)
+                remotion_descriptors = _open_remotion_descriptors(plan, input_paths=input_paths)
+                _ensure_remotion_dependencies(plan, descriptors=remotion_descriptors)
+                materialize_remotion_run(
+                    validated,
+                    plan,
+                    duration=input_durations[validated.recording],
+                    descriptors=remotion_descriptors,
+                )
+                if (
+                    remotion_descriptors.run_fd is None
+                    or remotion_descriptors.template_fd is None
+                    or remotion_descriptors.cache_fd is None
+                ):
+                    raise RenderError("Remotion descriptor bundle closed before rendering")
+                safe_command = _sandbox_remotion_command(
+                    plan,
+                    plan.command,
+                    run_fd=remotion_descriptors.run_fd,
+                    template_fd=remotion_descriptors.template_fd,
+                    cache_fd=remotion_descriptors.cache_fd,
+                    home_fd=remotion_descriptors.home_fd,
+                    tmp_fd=remotion_descriptors.tmp_fd,
+                )
+                execution_fds = remotion_descriptors.pass_fds() if platform.startswith("linux") else (
+                    remotion_descriptors.template_fd,
+                    remotion_descriptors.cache_fd,
+                )
+                _run_external(
+                    safe_command,
+                    cwd_fd=remotion_descriptors.template_fd,
+                    timeout=REMOTION_RENDER_TIMEOUT_SECONDS,
+                    pass_fds=execution_fds,
+                )
+                if platform.startswith("linux"):
+                    if working_fd is None or remotion_descriptors.run_fd is None:
+                        raise RenderError("Linux Remotion normalization descriptors are unavailable")
+                    remotion_output_fd = _open_bound_file(
+                        remotion_descriptors.run_fd,
+                        "remotion-output.mp4",
+                        flags=os.O_RDONLY,
+                        label="Remotion output",
+                    )
+                    try:
+                        normalized_fd = _open_bound_file(
+                            working_fd,
+                            "normalized.mp4",
+                            flags=os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                            label="normalized Remotion output",
+                        )
+                        _normalize(
+                            plan.output_path,
+                            normalized,
+                            source_fd=remotion_output_fd,
+                            destination_fd=normalized_fd,
+                        )
+                    finally:
+                        _close_fd(remotion_output_fd)
+                else:
+                    if not plan.output_path.is_file():
+                        raise RenderError("Remotion completed without creating its output")
+                    _normalize(plan.output_path, normalized)
+
+            info = probe_media(normalized, file_descriptor=normalized_fd)
+            validate_media(normalized, info, file_descriptor=normalized_fd)
+            artifact_parent_fd = _open_bound_directory(
+                validated.artifact_path.parent,
+                create=True,
+                label="artifact output directory",
             )
-            _ensure_remotion_dependencies(plan)
-            materialize_remotion_run(
-                validated,
-                plan,
-                duration=input_durations[validated.recording],
-            )
-            template_fd = _open_bound_directory(
-                plan.template_dir,
-                create=False,
-                label="Remotion template directory",
+            manifest_parent_fd = _open_bound_directory(
+                validated.manifest_path.parent,
+                create=True,
+                label="manifest output directory",
             )
             try:
-                _run_external(
-                    plan.command,
-                    cwd_fd=template_fd,
-                    timeout=REMOTION_RENDER_TIMEOUT_SECONDS,
-                    pass_fds=(template_fd,),
+                artifact_size, digest = _persist_artifact(
+                    normalized,
+                    validated.artifact_path,
+                    parent_fd=artifact_parent_fd,
+                    source_fd=normalized_fd,
                 )
-                if not plan.output_path.is_file():
-                    raise RenderError("Remotion completed without creating its output")
-                _normalize(plan.output_path, normalized)
+                manifest = _build_manifest(validated, validated.artifact_path, info, digest, artifact_size)
+                _write_manifest(validated.manifest_path, manifest, parent_fd=manifest_parent_fd)
             finally:
-                _close_fd(template_fd)
-
-        info = probe_media(normalized)
-        validate_media(normalized, info)
-        artifact_parent_fd = _open_bound_directory(
-            validated.artifact_path.parent,
-            create=True,
-            label="artifact output directory",
-        )
-        manifest_parent_fd = _open_bound_directory(
-            validated.manifest_path.parent,
-            create=True,
-            label="manifest output directory",
-        )
-        try:
-            artifact_size, digest = _persist_artifact(
-                normalized,
-                validated.artifact_path,
-                parent_fd=artifact_parent_fd,
-            )
-            manifest = _build_manifest(validated, validated.artifact_path, info, digest, artifact_size)
-            _write_manifest(validated.manifest_path, manifest, parent_fd=manifest_parent_fd)
+                _close_fd(artifact_parent_fd)
+                _close_fd(manifest_parent_fd)
         finally:
-            _close_fd(artifact_parent_fd)
-            _close_fd(manifest_parent_fd)
+            _close_fd(normalized_fd)
+            if remotion_descriptors is not None:
+                remotion_descriptors.close()
+            _close_fd(working_fd)
     return manifest
 
 

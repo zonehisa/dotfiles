@@ -96,12 +96,19 @@ path and SHA-256 hash, bytes, MIME, codec, pixel format, duration, resolution, a
 another. The renderer never performs an upload.
 
 Remotion installs dependencies into the copied temporary template with `npm ci --ignore-scripts`,
-using only a private relative `.npm-cache` directory inside the disposable run. On macOS,
-`sandbox-exec` limits npm writes to that run; unsupported platforms fail closed rather than using
+using only a private `.npm-cache` directory inside the disposable run. On Darwin,
+`sandbox-exec` limits npm writes to that run. On Linux/WSL2, `bubblewrap >= 0.10.0` (`bwrap`, with
+`--bind-fd`) makes the host root read-only, shares the network, and binds only the disposable run plus
+FD-bound template/cache directories at fixed namespace paths. `HOME`, `TMPDIR`, npm cache, and npm user config stay inside
+the run. Unsupported platforms, WSL1, or a missing/unusable sandbox fail closed rather than using
 an unsafe pathname cache. That cache is removed with the run and may require network/tool approval
-on every render. Set optional
+on every render. Keep WSL2 repositories under `~/code`, not `/mnt/c`; `setup.sh link-codex` warns for
+`/mnt/*` checkouts and safe mount/descriptor failures stop before evidence materialization. Set optional
 `browser_executable` to an already-installed local Chrome/Chromium executable, or use
 `PR_EVIDENCE_BROWSER_EXECUTABLE`; otherwise the renderer checks a conservative OS allowlist. The
 path must be executable, outside `repo_root`, and free of symlink components. The render command
 passes `--browser-executable` and fails closed before evidence materialization if no safe browser is
 available; Remotion is never allowed to download a browser after local evidence enters the run.
+
+On Linux/WSL2, the sandbox boundary uses the system-owned `/usr/bin/bwrap`, `/usr/bin/npm`, and
+`/usr/bin/npx` paths rather than resolving those executables from the caller's `PATH`.

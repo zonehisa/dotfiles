@@ -101,6 +101,47 @@ HOME="$ROLE_HOME" bash "$DOTFILES_DIR/setup.sh" unlink >/dev/null
 assert_link "$ROLE_HOME/.codex/agents/explorer-luna.toml" "$explorer_original"
 assert_link "$ROLE_HOME/.codex/agents/verifier-luna.toml" "$verifier_original"
 
+CODEX_ONLY_HOME="$TEST_ROOT/codex-only"
+mkdir -p "$CODEX_ONLY_HOME/.codex/agents" "$CODEX_ONLY_HOME/.codex/skills" "$CODEX_ONLY_HOME/.config"
+printf 'keep shell config\n' > "$CODEX_ONLY_HOME/.zshrc"
+printf 'keep desktop config\n' > "$CODEX_ONLY_HOME/.config/desktop.toml"
+printf 'existing Codex instructions\n' > "$CODEX_ONLY_HOME/.codex/AGENTS.md"
+printf 'existing Codex skill\n' > "$CODEX_ONLY_HOME/.codex/skills/pr-evidence-video"
+
+HOME="$CODEX_ONLY_HOME" bash "$DOTFILES_DIR/setup.sh" link-codex >/dev/null
+assert_link "$CODEX_ONLY_HOME/.agents/skills/parallel-worktree" "$DOTFILES_DIR/codex/skills/parallel-worktree"
+assert_link "$CODEX_ONLY_HOME/.codex/AGENTS.md" "$DOTFILES_DIR/codex/AGENTS.md"
+assert_link "$CODEX_ONLY_HOME/.codex/skills/pr-evidence-video" "$DOTFILES_DIR/codex/skills/pr-evidence-video"
+assert_link "$CODEX_ONLY_HOME/.codex/agents/reviewer-luna.toml" "$DOTFILES_DIR/codex/agents/reviewer-luna.toml"
+[[ ! -L "$CODEX_ONLY_HOME/.zshrc" ]] || fail "link-codex must not link shell configuration"
+[[ "$(cat "$CODEX_ONLY_HOME/.zshrc")" == "keep shell config" ]] || fail "link-codex changed shell configuration"
+[[ ! -L "$CODEX_ONLY_HOME/.config/desktop.toml" ]] || fail "link-codex must not link app configuration"
+[[ "$(cat "$CODEX_ONLY_HOME/.config/desktop.toml")" == "keep desktop config" ]] || fail "link-codex changed app configuration"
+
+HOME="$CODEX_ONLY_HOME" bash "$DOTFILES_DIR/setup.sh" unlink-codex >/dev/null
+assert_absent "$CODEX_ONLY_HOME/.agents/skills/parallel-worktree"
+[[ -f "$CODEX_ONLY_HOME/.codex/AGENTS.md" && ! -L "$CODEX_ONLY_HOME/.codex/AGENTS.md" ]] || fail "unlink-codex did not restore AGENTS.md"
+[[ "$(cat "$CODEX_ONLY_HOME/.codex/AGENTS.md")" == "existing Codex instructions" ]] || fail "unlink-codex restored wrong AGENTS.md"
+[[ -f "$CODEX_ONLY_HOME/.codex/skills/pr-evidence-video" && ! -L "$CODEX_ONLY_HOME/.codex/skills/pr-evidence-video" ]] || fail "unlink-codex did not restore PR evidence skill"
+[[ "$(cat "$CODEX_ONLY_HOME/.codex/skills/pr-evidence-video")" == "existing Codex skill" ]] || fail "unlink-codex restored wrong PR evidence skill"
+assert_absent "$CODEX_ONLY_HOME/.codex/agents/reviewer-luna.toml"
+[[ ! -L "$CODEX_ONLY_HOME/.zshrc" && "$(cat "$CODEX_ONLY_HOME/.zshrc")" == "keep shell config" ]] || fail "unlink-codex changed shell configuration"
+[[ ! -L "$CODEX_ONLY_HOME/.config/desktop.toml" && "$(cat "$CODEX_ONLY_HOME/.config/desktop.toml")" == "keep desktop config" ]] || fail "unlink-codex changed app configuration"
+
+ALL_HOME="$TEST_ROOT/no-arg"
+mkdir -p "$ALL_HOME/.config/sheldon" "$ALL_HOME/.codex"
+printf 'existing shell config\n' > "$ALL_HOME/.zshrc"
+printf 'existing sheldon config\n' > "$ALL_HOME/.config/sheldon/plugins.toml"
+printf 'existing no-arg instructions\n' > "$ALL_HOME/.codex/AGENTS.md"
+HOME="$ALL_HOME" bash "$DOTFILES_DIR/setup.sh" >/dev/null
+assert_link "$ALL_HOME/.zshrc" "$DOTFILES_DIR/.zshrc"
+assert_link "$ALL_HOME/.config/sheldon/plugins.toml" "$DOTFILES_DIR/.config/sheldon/plugins.toml"
+assert_link "$ALL_HOME/.codex/AGENTS.md" "$DOTFILES_DIR/codex/AGENTS.md"
+HOME="$ALL_HOME" bash "$DOTFILES_DIR/setup.sh" unlink >/dev/null
+[[ -f "$ALL_HOME/.zshrc" && "$(cat "$ALL_HOME/.zshrc")" == "existing shell config" ]] || fail "no-arg behavior changed shell link"
+[[ -f "$ALL_HOME/.config/sheldon/plugins.toml" && "$(cat "$ALL_HOME/.config/sheldon/plugins.toml")" == "existing sheldon config" ]] || fail "no-arg behavior changed app config"
+[[ -f "$ALL_HOME/.codex/AGENTS.md" && "$(cat "$ALL_HOME/.codex/AGENTS.md")" == "existing no-arg instructions" ]] || fail "no-arg behavior changed Codex link"
+
 STATUS_AFTER="$(git -C "$DOTFILES_DIR" status --short)"
 [[ "$STATUS_AFTER" == "$STATUS_BEFORE" ]] || fail "setup test changed repository status"
 

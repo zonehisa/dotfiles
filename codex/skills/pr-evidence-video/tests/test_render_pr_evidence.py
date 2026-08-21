@@ -340,6 +340,16 @@ class RenderEvidenceContractTests(unittest.TestCase):
         with self.assertRaises(MODULE.RenderError):
             MODULE.prepare_remotion_run(MODULE.validate_config(config), self.root / "run", duration=2.0)
 
+    def test_open_bound_file_os_error_is_controlled_render_error(self):
+        with mock.patch.object(MODULE.os, "open", side_effect=OSError("descriptor race")):
+            with self.assertRaisesRegex(MODULE.RenderError, "could not open test file"):
+                MODULE._open_bound_file(
+                    123,
+                    "recording.mp4",
+                    flags=os.O_RDONLY,
+                    label="test file",
+                )
+
     def test_browser_executable_can_be_supplied_by_environment(self):
         executable = self.root / "browser"
         executable.write_bytes(b"browser")
@@ -367,7 +377,8 @@ class RenderEvidenceContractTests(unittest.TestCase):
                 self.assertIsNone(cwd)
                 self.assertIsNotNone(cwd_fd)
                 self.assertIn(".npm-cache", command)
-                self.assertEqual(tuple(pass_fds), (cwd_fd, mock.ANY))
+                self.assertIn(cwd_fd, pass_fds)
+                self.assertEqual(len(pass_fds), 6)
                 (plan.template_dir / "node_modules").mkdir(parents=True, exist_ok=True)
 
             with mock.patch.object(MODULE, "_require_binary"), mock.patch.object(
@@ -382,6 +393,371 @@ class RenderEvidenceContractTests(unittest.TestCase):
             for fd in seen["pass_fds"]:
                 with self.assertRaises(OSError):
                     os.fstat(fd)
+
+    def test_linux_bubblewrap_command_binds_disposable_run_by_fd(self):
+        config = self.config()
+        config["decision"]["requires_zoom"] = True
+        config["decision"]["mode"] = "remotion"
+        config["zooms"] = [{"startMs": 0, "endMs": 500, "x": 0.5, "y": 0.5, "scale": 2}]
+        validated = MODULE.validate_config(config)
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-linux-sandbox-") as parent:
+            plan = MODULE.prepare_remotion_run(validated, Path(parent) / "run", duration=2.0)
+            descriptors = MODULE._open_remotion_descriptors(plan)
+            try:
+                with mock.patch.dict(os.environ, {"PATH": "./attacker:/tmp/attacker"}), mock.patch.object(
+                    MODULE.sys, "platform", "linux"
+                ), mock.patch.object(MODULE, "_bubblewrap_path", return_value=Path("/usr/bin/bwrap")), mock.patch.object(
+                    MODULE, "_trusted_linux_binary", return_value=Path("/usr/bin/npm")
+                ):
+                    command = MODULE._sandbox_npm_command(
+                        plan,
+                        ["npm", "ci"],
+                        run_fd=descriptors.run_fd,
+                        template_fd=descriptors.template_fd,
+                        cache_fd=descriptors.cache_fd,
+                        home_fd=descriptors.home_fd,
+                        tmp_fd=descriptors.tmp_fd,
+                    )
+            finally:
+                run_fd = descriptors.run_fd
+                descriptors.close()
+
+        self.assertEqual(command[0], "/usr/bin/bwrap")
+        self.assertIn("--ro-bind", command)
+        root_bind = command.index("--ro-bind")
+        self.assertEqual(command[root_bind : root_bind + 3], ["--ro-bind", "/", "/"])
+        for flag in ("--share-net", "--clearenv", "--unshare-user", "--disable-userns", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--cap-drop"):
+            self.assertIn(flag, command)
+        self.assertLess(command.index("--cap-drop"), root_bind)
+        self.assertLess(root_bind, command.index("--proc"))
+        self.assertLess(command.index("--proc"), command.index("--dev"))
+        self.assertLess(command.index("--dev"), command.index("--bind-fd"))
+        bind_fd_indices = [index for index, value in enumerate(command) if value == "--bind-fd"]
+        self.assertEqual(len(bind_fd_indices), 5)
+        self.assertEqual(command[bind_fd_indices[0] : bind_fd_indices[0] + 3], ["--bind-fd", str(run_fd), "/var/tmp"])
+        self.assertEqual(command[bind_fd_indices[1] + 2], "/var/tmp/template")
+        self.assertEqual(command[bind_fd_indices[2] + 2], "/var/tmp/npm-cache")
+        self.assertEqual(command[bind_fd_indices[3] + 2], "/var/tmp/home")
+        self.assertEqual(command[bind_fd_indices[4] + 2], "/var/tmp/tmp")
+        self.assertLess(bind_fd_indices[-1], command.index("--share-net"))
+        self.assertLess(command.index("--share-net"), command.index("--clearenv"))
+        self.assertIn("--clearenv", command)
+        self.assertIn("--bind-fd", command)
+        self.assertNotIn("/proc/self/fd/", " ".join(command))
+        self.assertIn("--setenv", command)
+        self.assertEqual(command[command.index("--") + 1 :], ["/usr/bin/npm", "ci"])
+
+        def env_value(name):
+            index = command.index(name)
+            self.assertEqual(command[index - 1], "--setenv")
+            return command[index + 1]
+
+        self.assertEqual(env_value("HOME"), "/var/tmp/home")
+        self.assertEqual(env_value("TMPDIR"), "/var/tmp/tmp")
+        self.assertEqual(
+            env_value("PATH"),
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
+        self.assertEqual(env_value("NPM_CONFIG_CACHE"), "/var/tmp/npm-cache")
+        self.assertEqual(env_value("npm_config_cache"), "/var/tmp/npm-cache")
+        self.assertEqual(env_value("NPM_CONFIG_USERCONFIG"), "/var/tmp/home/.npmrc")
+        self.assertEqual(env_value("npm_config_userconfig"), "/var/tmp/home/.npmrc")
+        self.assertEqual(command[command.index("--") + 1], "/usr/bin/npm")
+
+    def test_linux_bubblewrap_cache_fd_survives_path_swap_without_external_victim(self):
+        config = self.config()
+        config["decision"]["requires_zoom"] = True
+        config["decision"]["mode"] = "remotion"
+        config["zooms"] = [{"startMs": 0, "endMs": 500, "x": 0.5, "y": 0.5, "scale": 2}]
+        validated = MODULE.validate_config(config)
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-linux-cache-swap-") as parent:
+            plan = MODULE.prepare_remotion_run(validated, Path(parent) / "run", duration=2.0)
+            victim = Path(parent) / "victim"
+            victim.mkdir()
+            detached_cache = Path(parent) / "detached-cache"
+            descriptors = MODULE._open_remotion_descriptors(plan)
+            try:
+                plan.cache_dir.rename(detached_cache)
+                plan.cache_dir.symlink_to(victim, target_is_directory=True)
+                with mock.patch.object(MODULE.sys, "platform", "linux"), mock.patch.object(
+                    MODULE, "_bubblewrap_path", return_value=Path("/usr/bin/bwrap")
+                ), mock.patch.object(MODULE, "_trusted_linux_binary", return_value=Path("/usr/bin/npm")):
+                    command = MODULE._sandbox_npm_command(
+                        plan,
+                        ["npm", "ci"],
+                        run_fd=descriptors.run_fd,
+                        template_fd=descriptors.template_fd,
+                        cache_fd=descriptors.cache_fd,
+                        home_fd=descriptors.home_fd,
+                        tmp_fd=descriptors.tmp_fd,
+                    )
+                # A mocked child writes through the retained cache descriptor. The pathname now
+                # points at an external victim, so a path-based implementation would hit it.
+                marker_fd = os.open(
+                    "descriptor-bound",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=descriptors.cache_fd,
+                )
+                try:
+                    with os.fdopen(marker_fd, "wb") as cache_stream:
+                        cache_stream.write(b"descriptor-bound")
+                finally:
+                    MODULE._close_fd(marker_fd)
+            finally:
+                descriptors.close()
+            self.assertTrue((plan.cache_dir.parent / ".npm-cache").is_symlink())
+            self.assertFalse((detached_cache / "escaped-marker").exists())
+            self.assertTrue((detached_cache / "descriptor-bound").exists())
+            self.assertFalse((victim / "escaped-marker").exists())
+            self.assertFalse((victim / "descriptor-bound").exists())
+
+        self.assertIn("--bind-fd", command)
+        self.assertNotIn("/proc/self/fd/", " ".join(command))
+        self.assertNotIn(str(victim), " ".join(command))
+
+    def test_linux_missing_bubblewrap_fails_closed_before_materialization(self):
+        config = self.config()
+        config["decision"]["requires_zoom"] = True
+        config["decision"]["mode"] = "remotion"
+        config["zooms"] = [{"startMs": 0, "endMs": 500, "x": 0.5, "y": 0.5, "scale": 2}]
+        validated = MODULE.validate_config(config)
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-linux-no-sandbox-") as parent:
+            plan = MODULE.prepare_remotion_run(validated, Path(parent) / "run", duration=2.0)
+            missing_bwrap = Path(parent) / "missing-bwrap"
+            with mock.patch.object(MODULE.sys, "platform", "linux"), mock.patch.object(
+                MODULE, "_require_binary"
+            ), mock.patch.object(MODULE, "_trusted_linux_binary", return_value=Path("/usr/bin/npm")), mock.patch.object(
+                MODULE, "BUBBLEWRAP_EXECUTABLE", missing_bwrap
+            ):
+                with self.assertRaisesRegex(MODULE.RenderError, "bubblewrap"):
+                    MODULE._ensure_remotion_dependencies(plan)
+            self.assertFalse((plan.public_dir / "primary.mp4").exists())
+
+    def test_linux_bubblewrap_without_bind_fd_fails_closed(self):
+        candidate = shutil.which("true")
+        if candidate is None:
+            self.skipTest("a local executable is needed to mock an old bubblewrap binary")
+        with mock.patch.object(MODULE, "BUBBLEWRAP_EXECUTABLE", Path(candidate)), mock.patch.object(
+            MODULE.subprocess,
+            "run",
+            side_effect=[
+                subprocess.CompletedProcess(
+                    args=[candidate, "--version"], returncode=0, stdout="bubblewrap 0.10.0", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[candidate, "--help"], returncode=0, stdout="--ro-bind", stderr=""
+                ),
+            ],
+        ):
+            with self.assertRaisesRegex(MODULE.RenderError, "--bind-fd"):
+                MODULE._bubblewrap_path()
+
+    def test_linux_bubblewrap_unsafe_namespace_root_fails_closed(self):
+        config = self.config()
+        config["decision"]["requires_zoom"] = True
+        config["decision"]["mode"] = "remotion"
+        config["zooms"] = [{"startMs": 0, "endMs": 500, "x": 0.5, "y": 0.5, "scale": 2}]
+        validated = MODULE.validate_config(config)
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-linux-unsafe-root-") as parent:
+            plan = MODULE.prepare_remotion_run(validated, Path(parent) / "run", duration=2.0)
+            (plan.run_dir / "home").mkdir()
+            (plan.run_dir / "tmp").mkdir()
+            unsafe_root = Path(parent) / "unsafe-root"
+            victim_root = Path(parent) / "victim-root"
+            victim_root.mkdir()
+            unsafe_root.symlink_to(victim_root, target_is_directory=True)
+            descriptors = MODULE._open_remotion_descriptors(plan)
+            try:
+                with mock.patch.object(MODULE, "BUBBLEWRAP_NAMESPACE_ROOT", str(unsafe_root)), mock.patch.object(
+                    MODULE, "_bubblewrap_path", return_value=Path("/usr/bin/bwrap")
+                ), mock.patch.object(MODULE, "_trusted_linux_binary", return_value=Path("/usr/bin/npm")):
+                    with self.assertRaisesRegex(MODULE.RenderError, "bubblewrap disposable mount root"):
+                        MODULE._bubblewrap_npm_command(
+                            plan,
+                            ["npm", "ci"],
+                            run_fd=descriptors.run_fd,
+                            template_fd=descriptors.template_fd,
+                            cache_fd=descriptors.cache_fd,
+                            home_fd=descriptors.home_fd,
+                            tmp_fd=descriptors.tmp_fd,
+                        )
+            finally:
+                descriptors.close()
+
+    def test_linux_bubblewrap_capability_probe_failure_fails_closed(self):
+        candidate = shutil.which("true")
+        if candidate is None:
+            self.skipTest("a local executable is needed to mock a bubblewrap binary")
+        with mock.patch.object(MODULE, "BUBBLEWRAP_EXECUTABLE", Path(candidate)), mock.patch.object(
+            MODULE.subprocess,
+            "run",
+            side_effect=[
+                subprocess.CompletedProcess(
+                    args=[candidate, "--version"], returncode=0, stdout="bubblewrap 0.10.0", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[candidate, "--help"], returncode=1, stdout="--bind-fd", stderr="capability probe failed"
+                ),
+            ],
+        ):
+            with self.assertRaisesRegex(MODULE.RenderError, "capability probe"):
+                MODULE._bubblewrap_path()
+
+    def test_linux_dependency_install_uses_absolute_run_cache_and_closes_fds(self):
+        config = self.config()
+        config["decision"]["requires_zoom"] = True
+        config["decision"]["mode"] = "remotion"
+        config["zooms"] = [{"startMs": 0, "endMs": 500, "x": 0.5, "y": 0.5, "scale": 2}]
+        validated = MODULE.validate_config(config)
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-linux-install-") as parent:
+            plan = MODULE.prepare_remotion_run(validated, Path(parent) / "run", duration=2.0)
+            seen = {}
+
+            def fake_install(command, cwd=None, cwd_fd=None, pass_fds=(), **kwargs):
+                seen.update(command=command, cwd=cwd, cwd_fd=cwd_fd, pass_fds=pass_fds)
+                (plan.template_dir / "node_modules").mkdir(parents=True, exist_ok=True)
+
+            with mock.patch.object(MODULE.sys, "platform", "linux"), mock.patch.object(
+                MODULE, "_require_binary"
+            ), mock.patch.object(MODULE, "_trusted_linux_binary", return_value=Path("/usr/bin/npm")), mock.patch.object(
+                MODULE, "_bubblewrap_path", return_value=Path("/usr/bin/bwrap")
+            ), mock.patch.object(
+                MODULE, "_run_external", side_effect=fake_install
+            ):
+                MODULE._ensure_remotion_dependencies(plan)
+
+            self.assertEqual(seen["command"][0], "/usr/bin/bwrap")
+            self.assertEqual(
+                seen["command"][seen["command"].index("--cache") + 1],
+                "/var/tmp/npm-cache",
+            )
+            self.assertIsNone(seen["cwd"])
+            self.assertEqual(len(seen["pass_fds"]), 6)
+            for fd in seen["pass_fds"]:
+                with self.assertRaises(OSError):
+                    os.fstat(fd)
+
+    def test_linux_dependency_install_uses_children_of_retained_run_fd(self):
+        config = self.config()
+        config["decision"]["requires_zoom"] = True
+        config["decision"]["mode"] = "remotion"
+        config["zooms"] = [{"startMs": 0, "endMs": 500, "x": 0.5, "y": 0.5, "scale": 2}]
+        validated = MODULE.validate_config(config)
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-linux-relative-fds-") as parent:
+            plan = MODULE.prepare_remotion_run(validated, Path(parent) / "run", duration=2.0)
+            absolute_opens = []
+            child_opens = []
+            real_open = MODULE._open_bound_directory
+            real_child_open = MODULE._open_bound_child_directory
+
+            def track_absolute(path, **kwargs):
+                if Path(path) in (plan.template_dir, plan.cache_dir):
+                    absolute_opens.append(Path(path))
+                return real_open(path, **kwargs)
+
+            def track_child(parent_fd, name, **kwargs):
+                child_opens.append(name)
+                return real_child_open(parent_fd, name, **kwargs)
+
+            def fake_install(command, cwd=None, cwd_fd=None, **kwargs):
+                del command, cwd
+                os.mkdir("node_modules", mode=0o700, dir_fd=cwd_fd)
+
+            with mock.patch.object(MODULE.sys, "platform", "linux"), mock.patch.object(
+                MODULE, "_require_binary"
+            ), mock.patch.object(MODULE, "_trusted_linux_binary", return_value=Path("/usr/bin/npm")), mock.patch.object(
+                MODULE, "_bubblewrap_path", return_value=Path("/usr/bin/bwrap")
+            ), mock.patch.object(
+                MODULE, "_open_bound_directory", side_effect=track_absolute
+            ), mock.patch.object(MODULE, "_open_bound_child_directory", side_effect=track_child), mock.patch.object(
+                MODULE, "_run_external", side_effect=fake_install
+            ):
+                MODULE._ensure_remotion_dependencies(plan)
+
+            self.assertEqual(absolute_opens, [])
+            self.assertIn("template", child_opens)
+            self.assertIn(".npm-cache", child_opens)
+
+    def test_linux_wsl1_fails_before_dependency_materialization(self):
+        config = self.config()
+        config["decision"]["requires_zoom"] = True
+        config["decision"]["mode"] = "remotion"
+        config["zooms"] = [{"startMs": 0, "endMs": 500, "x": 0.5, "y": 0.5, "scale": 2}]
+        validated = MODULE.validate_config(config)
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-linux-wsl1-") as parent:
+            plan = MODULE.prepare_remotion_run(validated, Path(parent) / "run", duration=2.0)
+
+            def fake_install(command, cwd=None, cwd_fd=None, **kwargs):
+                del command, cwd, kwargs
+                os.mkdir("node_modules", mode=0o700, dir_fd=cwd_fd)
+
+            with mock.patch.object(MODULE.sys, "platform", "linux"), mock.patch.object(
+                MODULE, "_kernel_osrelease", return_value="4.4.0-Microsoft", create=True
+            ), mock.patch.object(MODULE, "_require_binary"), mock.patch.object(
+                MODULE, "_bubblewrap_path", return_value=Path("/usr/bin/bwrap")
+            ), mock.patch.object(MODULE, "_run_external", side_effect=fake_install):
+                with self.assertRaisesRegex(MODULE.RenderError, "WSL1"):
+                    MODULE._ensure_remotion_dependencies(plan)
+            self.assertFalse((plan.public_dir / "primary.mp4").exists())
+
+    def test_linux_bubblewrap_uses_trusted_path_not_caller_path(self):
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-bwrap-trusted-") as parent:
+            trusted = Path(parent) / "bwrap"
+            trusted.write_bytes(b"trusted")
+            trusted.chmod(0o700)
+            malicious = Path(parent) / "malicious-bwrap"
+            malicious.write_bytes(b"malicious")
+            malicious.chmod(0o700)
+            help_results = [
+                subprocess.CompletedProcess(
+                    args=[str(trusted), "--version"], returncode=0, stdout="bubblewrap 0.10.0", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[str(trusted), "--help"], returncode=0, stdout="--bind-fd", stderr=""
+                ),
+            ]
+            with mock.patch.object(MODULE, "BUBBLEWRAP_EXECUTABLE", trusted, create=True), mock.patch.dict(
+                os.environ, {"PATH": str(malicious)}
+            ), mock.patch.object(MODULE.shutil, "which", return_value=str(malicious)), mock.patch.object(
+                MODULE.subprocess, "run", side_effect=help_results
+            ):
+                self.assertEqual(MODULE._bubblewrap_path(), trusted)
+
+    def test_linux_bubblewrap_rejects_old_version(self):
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-bwrap-old-") as parent:
+            trusted = Path(parent) / "bwrap"
+            trusted.write_bytes(b"trusted")
+            trusted.chmod(0o700)
+            with mock.patch.object(MODULE, "BUBBLEWRAP_EXECUTABLE", trusted, create=True), mock.patch.object(
+                MODULE.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    args=[str(trusted), "--version"], returncode=0, stdout="bubblewrap 0.9.0", stderr=""
+                ),
+            ):
+                with self.assertRaisesRegex(MODULE.RenderError, "0.10.0"):
+                    MODULE._bubblewrap_path()
+
+    def test_linux_private_run_directory_symlink_fails_closed(self):
+        config = self.config()
+        config["decision"]["requires_zoom"] = True
+        config["decision"]["mode"] = "remotion"
+        config["zooms"] = [{"startMs": 0, "endMs": 500, "x": 0.5, "y": 0.5, "scale": 2}]
+        validated = MODULE.validate_config(config)
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-linux-private-dir-") as parent:
+            plan = MODULE.prepare_remotion_run(validated, Path(parent) / "run", duration=2.0)
+            victim = Path(parent) / "victim"
+            victim.mkdir()
+            (plan.run_dir / "home").symlink_to(victim, target_is_directory=True)
+            with mock.patch.object(MODULE.sys, "platform", "linux"), mock.patch.object(
+                MODULE, "_require_binary"
+            ), mock.patch.object(MODULE, "_trusted_linux_binary", return_value=Path("/usr/bin/npm")), mock.patch.object(
+                MODULE, "_bubblewrap_path", return_value=Path("/usr/bin/bwrap")
+            ):
+                with self.assertRaisesRegex(MODULE.RenderError, "Remotion disposable HOME directory"):
+                    MODULE._ensure_remotion_dependencies(plan)
+            self.assertFalse((victim / "npm-cache-marker").exists())
 
     @unittest.skipUnless(sys.platform == "darwin", "macOS sandbox-exec is the supported npm write boundary")
     def test_npm_cache_symlink_swap_during_child_cannot_touch_victim(self):
@@ -454,6 +830,93 @@ class RenderEvidenceContractTests(unittest.TestCase):
                 MODULE.render(config)
         self.assertEqual(len(captured), 1)
         self.assertFalse(captured[0].exists())
+
+    def test_linux_remotion_render_uses_bubblewrap_command(self):
+        config = self.config()
+        config["decision"]["requires_zoom"] = True
+        config["decision"]["mode"] = "remotion"
+        config["zooms"] = [{"startMs": 0, "endMs": 500, "x": 0.5, "y": 0.5, "scale": 2}]
+        captured = {}
+
+        def fake_materialize(_config, plan, **_kwargs):
+            captured["plan"] = plan
+            (plan.run_dir / "home").mkdir(exist_ok=True)
+            (plan.run_dir / "tmp").mkdir(exist_ok=True)
+            plan.cache_dir.mkdir(exist_ok=True)
+
+        def fake_run(command, **_kwargs):
+            captured["command"] = command
+            captured["plan"].output_path.write_bytes(b"rendered")
+
+        def fake_normalize(_source, destination, **_kwargs):
+            destination.write_bytes(b"normalized")
+
+        with mock.patch.object(MODULE.sys, "platform", "linux"), mock.patch.object(
+            MODULE, "_preflight_inputs", side_effect=lambda validated: {validated.recording: 2.0}
+        ), mock.patch.object(MODULE, "_ensure_remotion_dependencies"), mock.patch.object(
+            MODULE, "materialize_remotion_run", side_effect=fake_materialize
+        ), mock.patch.object(MODULE, "_sandbox_remotion_command", return_value=["sandboxed-remotion"]), mock.patch.object(
+            MODULE, "_run_external", side_effect=fake_run
+        ), mock.patch.object(MODULE, "_normalize", side_effect=fake_normalize), mock.patch.object(
+            MODULE, "probe_media", return_value=MODULE.MediaInfo("h264", "yuv420p", 1280, 720, 2.0, False)
+        ), mock.patch.object(MODULE, "validate_media"), mock.patch.object(
+            MODULE, "_persist_artifact", return_value=(9, "a" * 64)
+        ), mock.patch.object(MODULE, "_write_manifest"):
+            MODULE.render(config)
+
+        self.assertEqual(captured["command"], ["sandboxed-remotion"])
+
+    def test_linux_remotion_bubblewrap_maps_workspace_paths(self):
+        config = self.config()
+        config["decision"]["requires_zoom"] = True
+        config["decision"]["mode"] = "remotion"
+        config["zooms"] = [{"startMs": 0, "endMs": 500, "x": 0.5, "y": 0.5, "scale": 2}]
+        validated = MODULE.validate_config(config)
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-linux-render-command-") as parent:
+            plan = MODULE.prepare_remotion_run(validated, Path(parent) / "run", duration=2.0)
+            descriptors = MODULE._open_remotion_descriptors(plan)
+            try:
+                with mock.patch.object(MODULE.sys, "platform", "linux"), mock.patch.object(
+                    MODULE, "_bubblewrap_path", return_value=Path("/usr/bin/bwrap")
+                ), mock.patch.object(MODULE, "_trusted_linux_binary", return_value=Path("/usr/bin/npx")):
+                    command = MODULE._sandbox_remotion_command(
+                        plan,
+                        plan.command,
+                        run_fd=descriptors.run_fd,
+                        template_fd=descriptors.template_fd,
+                        cache_fd=descriptors.cache_fd,
+                        home_fd=descriptors.home_fd,
+                        tmp_fd=descriptors.tmp_fd,
+                    )
+            finally:
+                descriptors.close()
+
+        self.assertEqual(command[command.index("--") + 1], "/usr/bin/npx")
+        self.assertIn("/var/tmp/template/src/index.ts", command)
+        self.assertIn("/var/tmp/remotion-output.mp4", command)
+        self.assertIn("/var/tmp/props.json", command)
+        self.assertNotIn(str(plan.entrypoint), command)
+        self.assertNotIn(str(plan.output_path), command)
+        self.assertNotIn(str(plan.props_path), command)
+
+    def test_wsl1_rejected_for_raw_mode_before_normalization(self):
+        config = self.config()
+        with mock.patch.object(MODULE.sys, "platform", "linux"), mock.patch.object(
+            MODULE, "_kernel_osrelease", return_value="4.19.128-microsoft-standard"
+        ), mock.patch.object(
+            MODULE, "_preflight_inputs", side_effect=lambda validated: {validated.recording: 2.0}
+        ), mock.patch.object(
+            MODULE, "_normalize"
+        ) as normalize:
+            with self.assertRaises(MODULE.RenderError):
+                MODULE.render(config)
+        normalize.assert_not_called()
+
+    def test_linux_fixed_tool_paths_are_documented(self):
+        readme = Path(__file__).resolve().parents[4] / "README.md"
+        text = readme.read_text(encoding="utf-8")
+        for executable in ("/usr/bin/bwrap", "/usr/bin/npm", "/usr/bin/npx"):
+            self.assertIn(executable, text)
 
     def test_command_contract(self):
         command = MODULE.build_ffmpeg_command(Path("input.mov"), Path("output.mp4"))
@@ -777,25 +1240,163 @@ class RenderEvidenceContractTests(unittest.TestCase):
             plan = MODULE.prepare_remotion_run(validated, Path(parent) / "run", duration=2.0)
             victim = Path(parent) / "victim"
             victim.mkdir()
-            real_open = MODULE._open_bound_directory
+            real_child_open = MODULE._open_bound_child_directory
             swapped = False
 
-            def swap_cache(path, *, create=False, label="directory"):
+            def swap_cache(parent_fd, name, *, create=False, label="directory"):
                 nonlocal swapped
                 if not swapped and label == "Remotion npm cache":
                     swapped = True
-                    if path.exists():
-                        path.rmdir()
-                    path.symlink_to(victim, target_is_directory=True)
-                return real_open(path, create=create, label=label)
+                    plan.cache_dir.mkdir(exist_ok=True)
+                    plan.cache_dir.rmdir()
+                    plan.cache_dir.symlink_to(victim, target_is_directory=True)
+                return real_child_open(parent_fd, name, create=create, label=label)
 
             with mock.patch.object(MODULE, "_require_binary"), mock.patch.object(
-                MODULE, "_open_bound_directory", side_effect=swap_cache
+                MODULE, "_open_bound_child_directory", side_effect=swap_cache
             ), mock.patch.object(MODULE, "_run_external") as external:
                 with self.assertRaises(MODULE.RenderError):
                     MODULE._ensure_remotion_dependencies(plan)
             external.assert_not_called()
             self.assertEqual(list(victim.iterdir()), [])
+
+    def test_remotion_materialization_uses_prevalidated_descriptor_bundle_after_template_swap(self):
+        config = self.config()
+        config["decision"]["requires_zoom"] = True
+        config["decision"]["mode"] = "remotion"
+        config["zooms"] = [{"startMs": 0, "endMs": 500, "x": 0.5, "y": 0.5, "scale": 2}]
+        validated = MODULE.validate_config(config)
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-materialize-swap-") as parent:
+            plan = MODULE.prepare_remotion_run(validated, Path(parent) / "run", duration=2.0)
+            detached = Path(parent) / "detached-template"
+            victim = Path(parent) / "victim-template"
+            victim.mkdir()
+            detached_recording = self.root / "detached-recording.mp4"
+            victim_recording = self.root / "victim-recording.mp4"
+            victim_recording.write_bytes(b"attacker-recording")
+            descriptors = MODULE._open_remotion_descriptors(plan, input_paths=(validated.recording,))
+            try:
+                plan.template_dir.rename(detached)
+                plan.template_dir.symlink_to(victim, target_is_directory=True)
+                validated.recording.rename(detached_recording)
+                validated.recording.symlink_to(victim_recording)
+                MODULE.materialize_remotion_run(validated, plan, duration=2.0, descriptors=descriptors)
+            finally:
+                descriptors.close()
+                if validated.recording.is_symlink():
+                    validated.recording.unlink()
+                detached_recording.rename(validated.recording)
+            self.assertTrue((detached / "public" / "primary.mp4").is_file())
+            self.assertFalse((victim / "public" / "primary.mp4").exists())
+            self.assertEqual((detached / "public" / "primary.mp4").read_bytes(), b"not a media file")
+
+    def test_linux_bubblewrap_binds_retained_home_and_tmp_descriptors(self):
+        config = self.config()
+        config["decision"]["requires_zoom"] = True
+        config["decision"]["mode"] = "remotion"
+        config["zooms"] = [{"startMs": 0, "endMs": 500, "x": 0.5, "y": 0.5, "scale": 2}]
+        validated = MODULE.validate_config(config)
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-home-tmp-fds-") as parent:
+            plan = MODULE.prepare_remotion_run(validated, Path(parent) / "run", duration=2.0)
+            descriptors = MODULE._open_remotion_descriptors(plan)
+            try:
+                with mock.patch.object(MODULE.sys, "platform", "linux"), mock.patch.object(
+                    MODULE, "_bubblewrap_path", return_value=Path("/usr/bin/bwrap")
+                ), mock.patch.object(MODULE, "_trusted_linux_binary", return_value=Path("/usr/bin/npm")):
+                    command = MODULE._sandbox_npm_command(
+                        plan,
+                        ["npm", "ci"],
+                        run_fd=descriptors.run_fd,
+                        template_fd=descriptors.template_fd,
+                        cache_fd=descriptors.cache_fd,
+                        home_fd=descriptors.home_fd,
+                        tmp_fd=descriptors.tmp_fd,
+                    )
+            finally:
+                descriptors.close()
+        bind_fd_indices = [index for index, value in enumerate(command) if value == "--bind-fd"]
+        self.assertEqual(len(bind_fd_indices), 5)
+        self.assertEqual(command[bind_fd_indices[3] + 2], "/var/tmp/home")
+        self.assertEqual(command[bind_fd_indices[4] + 2], "/var/tmp/tmp")
+        self.assertEqual(command[command.index("HOME") + 1], "/var/tmp/home")
+        self.assertEqual(command[command.index("TMPDIR") + 1], "/var/tmp/tmp")
+
+    def test_linux_home_and_tmp_descriptors_survive_post_validation_path_swap(self):
+        config = self.config()
+        config["decision"]["requires_zoom"] = True
+        config["decision"]["mode"] = "remotion"
+        config["zooms"] = [{"startMs": 0, "endMs": 500, "x": 0.5, "y": 0.5, "scale": 2}]
+        validated = MODULE.validate_config(config)
+        with tempfile.TemporaryDirectory(prefix="pr-evidence-home-tmp-swap-") as parent:
+            plan = MODULE.prepare_remotion_run(validated, Path(parent) / "run", duration=2.0)
+            home_detached = Path(parent) / "detached-home"
+            tmp_detached = Path(parent) / "detached-tmp"
+            victim = Path(parent) / "victim"
+            victim.mkdir()
+            descriptors = MODULE._open_remotion_descriptors(plan)
+            try:
+                (plan.run_dir / "home").rename(home_detached)
+                (plan.run_dir / "home").symlink_to(victim, target_is_directory=True)
+                (plan.run_dir / "tmp").rename(tmp_detached)
+                (plan.run_dir / "tmp").symlink_to(victim, target_is_directory=True)
+                for fd, name in ((descriptors.home_fd, "home-bound"), (descriptors.tmp_fd, "tmp-bound")):
+                    marker_fd = os.open(
+                        name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        0o600,
+                        dir_fd=fd,
+                    )
+                    MODULE._close_fd(marker_fd)
+            finally:
+                descriptors.close()
+            self.assertTrue((home_detached / "home-bound").is_file())
+            self.assertTrue((tmp_detached / "tmp-bound").is_file())
+            self.assertFalse((victim / "home-bound").exists())
+            self.assertFalse((victim / "tmp-bound").exists())
+
+    def test_remotion_normalization_uses_retained_descriptors_after_run_path_swap(self):
+        workspace = self.root / "normalization-workspace"
+        workspace.mkdir()
+        source = workspace / "remotion-output.mp4"
+        source.write_bytes(b"rendered")
+        destination = workspace / "normalized.mp4"
+        destination_fd = os.open(
+            destination,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+        source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+        victim = self.root / "victim-normalized"
+        victim.mkdir()
+        detached = self.root / "detached-normalized"
+        try:
+            workspace.rename(detached)
+            workspace.symlink_to(victim, target_is_directory=True)
+
+            def fake_run(command, **kwargs):
+                self.assertIn(str(MODULE._fd_path(source_fd)), command)
+                self.assertIn(str(MODULE._fd_path(destination_fd)), command)
+                self.assertIn(source_fd, kwargs["pass_fds"])
+                self.assertIn(destination_fd, kwargs["pass_fds"])
+                os.write(destination_fd, b"normalized")
+
+            with mock.patch.object(MODULE, "_require_binary"), mock.patch.object(
+                MODULE, "_run_external", side_effect=fake_run
+            ), mock.patch.object(MODULE.sys, "platform", "linux"):
+                MODULE._normalize(
+                    source,
+                    destination,
+                    source_fd=source_fd,
+                    destination_fd=destination_fd,
+                )
+        finally:
+            MODULE._close_fd(source_fd)
+            MODULE._close_fd(destination_fd)
+            if workspace.is_symlink():
+                workspace.unlink()
+            detached.rename(workspace)
+        self.assertEqual((workspace / "normalized.mp4").read_bytes(), b"normalized")
+        self.assertFalse((victim / "normalized.mp4").exists())
 
 if __name__ == "__main__":
     unittest.main()

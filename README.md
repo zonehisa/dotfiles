@@ -59,7 +59,7 @@ Codex の Skills と設定ファイルは次のパスへシンボリックリン
 
 実行時registry、lock、evidenceは`${CODEX_HOME:-$HOME/.codex}/parallel-worktree`、Worktreeはadapterごとの管理領域に保持され、dotfilesでは管理しません。
 
-実装時はGPT-5.6 Luna `max`の`implementer_luna`を唯一のwriterとして使います。独立したcode／contract／impact調査はread-onlyの`explorer_luna`、開始時の安全な非変異baseline／test map／browser planは`verifier_luna`へ分離します。user-visible UIの実装checkpoint後はimplementerをpauseし、Coordinatorの`coordinator_browser_evidence` packetをverifierがread-onlyで検証し、targeted test／log分析／objective non-browser checksを実行します。Non-UI checkpointはbrowser packet・human UI acceptance・`accepted_source_fingerprint`なしでtargeted test／log分析／objective non-browser checksを直接実行します。親から起動できる子agentは最大3つ（Git／review roleを含む全delegated roleの合計）で、nested delegationは行いません。
+小規模でboundedなR1/R2は、GPT-5.6 Luna `max`の保存済み`implementer_luna`を唯一のwriterとして、調査・Plan/TDD・実装checkpointまで継続します。`explorer_luna`は同じpathの再調査ではなく、名前付きの独立した不確実性がある場合だけ、`verifier_luna`のcheckpoint前確認は明示的なsetup/start・test-map・browser-plan不確実性がある場合だけ分離します。それ以外はcoherent implementation checkpointを待ちます。user-visible UIの実装checkpoint後はimplementerをpauseし、Coordinatorの`coordinator_browser_evidence` packetをverifierがread-onlyで検証し、targeted test／log分析／objective non-browser checksを実行します。Non-UI checkpointはbrowser packet・human UI acceptance・`accepted_source_fingerprint`なしでtargeted test／log分析／objective non-browser checksを直接実行します。親から起動できる子agentは最大3つ（Git／review roleを含む全delegated roleの合計）で、nested delegationは行いません。
 
 ### User-visible UI workflow order
 

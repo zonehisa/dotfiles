@@ -252,6 +252,70 @@ grep -q 'implementer_luna.*explorer_luna.*verifier_luna' "$ROOT/README.md"
 grep -q 'implementer-luna.toml' "$ROOT/setup.sh"
 grep -q 'explorer-luna.toml' "$ROOT/setup.sh"
 grep -q 'verifier-luna.toml' "$ROOT/setup.sh"
+
+# Bounded `is` fast path: the policy must make the automatic implementation
+# continuation and its mechanical guardrails observable to this sensor.
+for surface in "$POLICY" "$AGENTS" "$ISSUE_START"; do
+  grep -Fq 'bounded `is` fast path' "$surface"
+  grep -Fq 'Issue selection and dedicated branch/worktree setup are always authorized by `is`, independently of bounded fast-path gates.' "$surface"
+  grep -Fq 'small bounded R1/R2' "$surface"
+  grep -Fq 'concrete acceptance criteria' "$surface"
+  grep -Fq 'testable scenario' "$surface"
+  grep -Fq 'existing repository pattern' "$surface"
+  grep -Fq 'no persistence, authorization, API/data-contract, or state-transition change' "$surface"
+  grep -Fq 'at most three source/test paths' "$surface"
+  grep -Fq 'no material unresolved decision, scope expansion, destructive/external authorization requirement, or other authority gap' "$surface"
+  grep -Fq 'falls back to the normal split flow' "$surface"
+  grep -Fq 'does not authorize stage, commit, push, PR, or merge' "$surface"
+done
+grep -Fq 'does not pause merely to ask permission to implement' "$ISSUE_START"
+grep -Fq 'one saved `implementer_luna`' "$POLICY" "$AGENTS" "$ISSUE_START"
+grep -Fq 'Do not spawn `explorer_luna` merely to rediscover the same paths' "$POLICY" "$AGENTS" "$ISSUE_START"
+grep -Fq 'explorer_luna only for a specifically named independent uncertainty' "$POLICY" "$AGENTS" "$ISSUE_START"
+grep -Fq 'verifier pre-checkpoint only when an explicit setup/start/test-map/browser-plan uncertainty exists' "$POLICY" "$AGENTS" "$ISSUE_START"
+grep -Fq 'otherwise wait for the coherent implementation checkpoint' "$POLICY" "$AGENTS" "$ISSUE_START"
+grep -Fq 'final checkpoint verification and review remain mandatory' "$POLICY" "$AGENTS" "$ISSUE_START"
+
+# `is` expands local implementation authority only; delivery mutations remain
+# separately authorized by the explicit-authorization table.
+grep -Fq 'Issue selection and dedicated branch/worktree setup are always authorized by `is`, independently of bounded fast-path gates.' "$POLICY"
+grep -Fq 'does not authorize stage, commit, push, PR, or merge' "$POLICY"
+
+# The branch/worktree/state handoff must precede implementation planning/TDD.
+assert_sequence "$ISSUE_START" \
+  'Have the saved `git_operator_luna` resolve the target, fetch origin, and create the dedicated branch/Worktree' \
+  'Have the saved `git_operator_luna` save current Issue context when `.agent/state/` exists or repository docs require it' \
+  'Confirm HEAD, branch, clean, and the saved Issue context' \
+  'Hand the checked-out relevant specifications, code, tests, and boundary analysis to the one saved `implementer_luna`' \
+  'Have that saved `implementer_luna` use Plan as the default implementation entry point' \
+  'Convert confirmed scenarios into acceptance criteria.' \
+  'When the bounded `is` fast path below passes, continue without a second implementation-permission pause; otherwise stop at Plan for the missing decision or authority.' \
+  'Hand implementation planning/TDD to that same saved `implementer_luna`'
+
+# The issue-start execution surface must carry the complete fast-path gate,
+# rather than relying on markers split across policy/agent documentation.
+issue_start_fast_path=$(awk '
+  /^## Bounded `is` fast path$/ { in_section=1 }
+  in_section { print }
+  in_section && /^Useful commands:/ { exit }
+' "$ISSUE_START")
+for marker in \
+  'concrete acceptance criteria' \
+  'existing repository pattern' \
+  'no persistence, authorization, API/data-contract, or state-transition change' \
+  'at most three source/test paths' \
+  'no material unresolved decision, scope expansion, destructive/external authorization requirement, or other authority gap' \
+  'does not pause merely to ask permission to implement' \
+  'falls back to the normal split flow' \
+  'does not authorize stage, commit, push, PR, or merge' \
+  'one saved `implementer_luna`' \
+  'Do not spawn `explorer_luna` merely to rediscover the same paths' \
+  'explorer_luna only for a specifically named independent uncertainty' \
+  'verifier pre-checkpoint only when an explicit setup/start/test-map/browser-plan uncertainty exists' \
+  'otherwise wait for the coherent implementation checkpoint' \
+  'final checkpoint verification and review remain mandatory'; do
+  grep -Fq "$marker" <(printf '%s\n' "$issue_start_fast_path")
+done
 assert_absent 'R1以上は実装担当と別の新規Codex task' "$POLICY"
 assert_absent 'substitute self-review/subagents' "$DELIVERY"
 assert_absent 'passed independent gate' "$DELIVERY"
@@ -330,8 +394,7 @@ grep -Fq 'schema v1 is owner plus exactly the already-registered observer deskto
 grep -Fq 'Implementation planning/TDD uses the coordinator-owned saved `implementer_luna`' "$ISSUE_START"
 grep -Fq '`is` Git/GitHub discovery, target resolution, and command preparation use the saved `git_operator_luna`' "$ISSUE_START"
 grep -Fq 'Have the saved `git_operator_luna` inspect and prepare Git/GitHub startup operations' "$ISSUE_START"
-grep -Fq 'Hand implementation planning/TDD to the coordinator' "$ISSUE_START"
-grep -Fq 'Hand implementation planning/TDD to the coordinator-owned saved `implementer_luna`' "$ISSUE_START"
+grep -Fq 'Hand implementation planning/TDD to that same saved `implementer_luna`' "$ISSUE_START"
 assert_absent 'selected implementation agent' "$ISSUE_START"
 grep -Fq 'type(schema_version) is not int' "$PARALLEL_HELPER"
 grep -Fq 'validate_legacy_task_value' "$PARALLEL_HELPER"

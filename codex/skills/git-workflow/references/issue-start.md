@@ -20,8 +20,8 @@
 6. Use Plan as the default pre-implementation workflow:
    - establish the goal, users, scope, success criteria, acceptance scenarios, and test approach
    - confirm at least one concrete user scenario before finalizing user-visible behavior or workflow changes
-   - invoke `dig` only for unresolved high-risk decisions whose answers materially change UI interaction, workflows, state transitions, authorization, or competing designs
-   - ask one `dig` question at a time and return to Plan when those decisions are resolved
+   - Batch low-risk, reversible, and repository-pattern decisions with concrete acceptance criteria into one recommended plan.
+   - Use one-question dig only for unresolved material decisions whose answers materially change UI interaction, workflows, state transitions, authorization, or competing designs; return to Plan when those decisions are resolved.
    - skip full `dig` for small bugs with clear reproduction and expected behavior, copy/comment changes, and straightforward internal changes
 7. Convert confirmed scenarios into acceptance criteria. Hand implementation planning/TDD to the coordinator-owned saved `implementer_luna` (`fork_turns = "none"`, GPT-5.6 Luna `max`, workspace-write) without mutating or re-delegating the saved `git_operator_luna` lifecycle.
 8. Fetch origin and create a branch directly from the detected default branch using repository naming conventions. Fall back to `bugfix/#123-description`, `docs/#123-description`, `refactor/#123-description`, or `feature/#123-description` by change type. In an active `parallel-worktree` lifecycle, do not run these mutations directly: select the planned branch name, then request its `pw-helper` to fetch/create the registered branch with the current operation ID.

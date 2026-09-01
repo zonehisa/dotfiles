@@ -10,6 +10,8 @@ OPERATOR="$ROOT/codex/agents/git-operator-luna.toml"
 IMPLEMENTER="$ROOT/codex/agents/implementer-luna.toml"
 EXPLORER="$ROOT/codex/agents/explorer-luna.toml"
 VERIFIER="$ROOT/codex/agents/verifier-luna.toml"
+UI_EVIDENCE="$ROOT/codex/skills/git-workflow/scripts/ui_evidence.py"
+UI_EVIDENCE_TEST="$ROOT/codex/skills/git-workflow/tests/test_ui_evidence.py"
 PR_EVIDENCE_SKILL="$ROOT/codex/skills/pr-evidence-video"
 HANDOFF="$PR_EVIDENCE_SKILL/references/github-handoff.md"
 PARALLEL_SKILL="$ROOT/codex/skills/parallel-worktree/SKILL.md"
@@ -453,15 +455,15 @@ assert_recording_scope "$AGENTS"
 assert_recording_scope "$DELIVERY"
 assert_recording_scope "$VERIFIER"
 
-# User-visible UI workflow order: implementation/IAB loops, explicit human
-# acceptance, independent technical verification, then completion review.
+# User-visible UI workflow order: provisional implementation/IAB loop, verifier,
+# completion review/fix loop, then final IAB and one explicit human acceptance.
 UI_GATE_SURFACES=("$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md")
 for surface in "${UI_GATE_SURFACES[@]}"; do
   grep -Fq 'User-visible UI workflow order' "$surface"
   grep -Fq '1. Implementation/IAB loop' "$surface"
-  grep -Fq '2. Human UI/behavior acceptance' "$surface"
-  grep -Fq '3. Verifier technical verification' "$surface"
-  grep -Fq '4. Completion review' "$surface"
+  grep -Fq '2. Verifier technical verification' "$surface"
+  grep -Fq '3. Completion review' "$surface"
+  grep -Fq '4. Final IAB and human UI/behavior acceptance' "$surface"
   grep -Fq 'Use explicit checkpoint/evidence wording; do not add a complex persisted state mechanism.' "$surface"
   grep -Fq 'Only a real human/user may provide explicit combined UI acceptance for appearance and primary behavior.' "$surface"
   grep -Fq 'The Coordinator records that packet and human acceptance as the final UI acceptance evidence, tied to' "$surface"
@@ -471,48 +473,47 @@ for surface in "${UI_GATE_SURFACES[@]}"; do
   grep -Fq 'source before/after integrity' "$surface"
   grep -Fq 'Non-UI changes keep the existing flow.' "$surface"
   grep -Fq 'Purely non-user-visible verification artifact changes do not invalidate human acceptance.' "$surface"
-  grep -Fq 'If verifier finds a problem or later source changes affect user-visible appearance or behavior, return to the same implementer/IAB loop and require combined human acceptance again before verifier.' "$surface"
-  grep -Fq 'For user-visible UI only, `accepted_source_fingerprint` is an ephemeral canonical hash for the exact `checkpoint_scope`.' "$surface"
-  grep -Fq 'Serialize the record set as canonical UTF-8 JSON with sorted keys and no insignificant whitespace, then SHA-256 those bytes.' "$surface"
-  grep -Fq 'Git status/diff are supplementary before/after evidence, not the fingerprint.' "$surface"
+  grep -Fq 'If verifier finds a problem, return to the same implementer/IAB loop and rerun verifier before completion review.' "$surface"
+  grep -Fq 'Any post-review source or material UI change reopens verifier and completion review before final IAB and human acceptance.' "$surface"
+  grep -Fq 'For user-visible UI only, `accepted_source_fingerprint` is an ephemeral canonical SHA-256 of the exact `checkpoint_scope` working-tree records only.' "$surface"
+  grep -Fq 'material browser packet is schema-versioned and hashed as canonical UTF-8 JSON with sorted keys and no insignificant whitespace.' "$surface"
+  grep -Fq 'Git status/diff remain supplementary before/after evidence, not the UI source fingerprint.' "$surface"
   grep -Fq 'A mismatch invalidates the acceptance and returns to the same implementer/IAB loop and human gate.' "$surface"
   assert_absent 'completion review runs during the implementation/IAB loop' "$surface"
-  assert_absent 'verifier_luna runs before human UI/behavior acceptance' "$surface"
+  assert_absent 'verifier_luna runs only after human UI/behavior acceptance' "$surface"
   assert_absent 'accepted_source_fingerprint is optional' "$surface"
 done
 
 for surface in "${UI_GATE_SURFACES[@]}"; do
   assert_sequence "$surface" \
     '1. Implementation/IAB loop' \
-    '2. Human UI/behavior acceptance' \
-    '3. Verifier technical verification' \
-    '4. Completion review'
+    '2. Verifier technical verification' \
+    '3. Completion review' \
+    '4. Final IAB and human UI/behavior acceptance'
 done
 
 grep -Fq 'keep iterating implementation, Coordinator/main browser checks' "$IMPLEMENTER"
 grep -Fq 'micro-adjustments in this same saved implementer loop' "$IMPLEMENTER"
-assert_wrapped_phrase 'present the exact candidate and its `coordinator_browser_evidence` packet to a real human/user' "$IMPLEMENTER"
-grep -Fq 'Do not start verifier_luna or' "$IMPLEMENTER"
-assert_wrapped_phrase 'reviewer_luna before explicit human UI/behavior acceptance' "$IMPLEMENTER"
-grep -Fq 'Resume this same saved implementer agent for human feedback' "$IMPLEMENTER"
-grep -Fq 'require explicit human UI/behavior acceptance tied to checkpoint_token' "$VERIFIER"
-assert_wrapped_phrase 'and checkpoint_scope plus a valid Coordinator packet before running final technical verification' "$VERIFIER"
-assert_wrapped_phrase 'For that UI path, do not run final technical verification before explicit human UI/behavior acceptance.' "$VERIFIER"
+grep -Fq 'provisional IAB evidence' "$IMPLEMENTER"
+assert_wrapped_phrase 'Resume this same saved implementer agent for verifier findings' "$IMPLEMENTER"
+assert_wrapped_phrase 'run final technical verification before human acceptance' "$VERIFIER"
+assert_wrapped_phrase 'after the Coordinator identifies a coherent implementation checkpoint and provides a valid provisional Coordinator packet' "$VERIFIER"
+assert_wrapped_phrase 'Do not wait for human UI/behavior acceptance before verifier.' "$VERIFIER"
 grep -Fq 'Do not decide subjective' "$VERIFIER"
 assert_wrapped_phrase 'appearance or usability acceptance' "$VERIFIER"
-assert_wrapped_phrase 'Source changes that affect user-visible appearance' "$VERIFIER"
-assert_wrapped_phrase 'behavior invalidate the acceptance' "$VERIFIER"
-assert_wrapped_phrase 'verification artifacts alone do not invalidate human acceptance.' "$VERIFIER"
-grep -Fq 'verification before explicit human' "$VERIFIER"
+assert_wrapped_phrase 'Source changes that affect user-visible appearance or behavior invalidate verifier and completion-review evidence before final human acceptance.' "$VERIFIER"
+assert_wrapped_phrase 'Tool-generated verification artifacts alone do not invalidate material UI evidence.' "$VERIFIER"
+grep -Fq 'verification before final human' "$VERIFIER"
 assert_absent 'verifier_luna may accept UI/behavior on behalf of a human' "$VERIFIER"
 
-# UI browser behavior and recording are post-acceptance verifier work only.
-grep -Fq 'For user-visible UI only, before human acceptance, verifier may run only non-mutating baseline, test-map, log-shape, or browser-plan checks.' "$VERIFIER"
-grep -Fq 'Do not perform final technical verification before human acceptance and the Coordinator evidence packet.' "$VERIFIER"
-grep -Fq 'For user-visible UI only, only after the Coordinator records human UI/behavior acceptance evidence tied to checkpoint_token and checkpoint_scope and provides a valid `coordinator_browser_evidence` packet may verifier proceed.' "$VERIFIER"
+# UI browser behavior is a provisional implementation checkpoint; final IAB and
+# human acceptance happen only after verifier and completion review.
+grep -Fq 'For user-visible UI only, before the Coordinator provides a provisional Coordinator packet, verifier may run only non-mutating baseline, test-map, log-shape, or browser-plan checks.' "$VERIFIER"
+grep -Fq 'Do not defer final technical verification until after human acceptance.' "$VERIFIER"
+grep -Fq 'For user-visible UI only, after the Coordinator identifies a coherent implementation checkpoint and provides a valid provisional Coordinator packet, verifier may proceed.' "$VERIFIER"
 grep -Fq 'For non-UI checkpoints, after `checkpoint_token`/`checkpoint_scope` and implementer pause, no Coordinator browser packet, human UI acceptance, or `accepted_source_fingerprint` is required; run targeted tests, log analysis, and objective non-browser checks directly.' "$VERIFIER"
-grep -Fq 'For user-visible UI only, before starting final technical verification, recompute the canonical `accepted_source_fingerprint` for the exact `checkpoint_scope`' "$VERIFIER"
-assert_absent 'Before human acceptance, verifier may only run non-mutating baseline, test-map, log-shape, or browser-plan checks\.' "$VERIFIER"
+grep -Fq 'For user-visible UI only, before technical verification, recompute the canonical `accepted_source_fingerprint` for the exact `checkpoint_scope`' "$VERIFIER"
+assert_absent 'Before final human acceptance, verifier may only run non-mutating baseline, test-map, log-shape, or browser-plan checks\.' "$VERIFIER"
 assert_absent '^Before starting final technical or browser verification, compare the acceptance-time `accepted_source_fingerprint` for the exact' "$VERIFIER"
 assert_absent 'At a coherent checkpoint for a user-visible UI change, perform the browser behavior check and capture the local raw recording.' "$VERIFIER"
 
@@ -585,15 +586,20 @@ for surface in "${EVIDENCE_POLICY_SURFACES[@]}"; do
   assert_absent 'The `coordinator_browser_evidence` packet must include `browser_executor=coordinator/main`, exact selector, checked URL, primary flow/view, viewport, result, artifact/tool evidence identifiers/hashes, `checkpoint_token`, `checkpoint_scope`, `accepted_source_fingerprint`, and human acceptance\.' "$surface"
   assert_absent 'fingerprint covers source content plus staged/unstaged/untracked inventory' "$surface"
   assert_absent 'every scoped path and staged/unstaged/untracked inventory+content' "$surface"
-  grep -Fq 'For user-visible UI only, before human acceptance the Coordinator freezes one canonical `coordinator_browser_evidence` packet' "$surface"
+  grep -Fq 'For user-visible UI only, before final human acceptance the Coordinator freezes one canonical `coordinator_browser_evidence` packet' "$surface"
   grep -Fq 'Canonical serialization is deterministic UTF-8 canonical JSON with sorted keys and no insignificant whitespace' "$surface"
   grep -Fq 'Any packet field, revision, artifact, or hash change invalidates acceptance and requires a new packet/hash and human acceptance' "$surface"
-  grep -Fq '`accepted_source_fingerprint` is an ephemeral canonical hash for the exact `checkpoint_scope`' "$surface"
-  grep -Fq 'deterministic sorted/null-safe records' "$surface"
-  grep -Fq 'staged/unstaged/untracked inventory entries are filtered to the exact `checkpoint_scope`' "$surface"
-  grep -Fq 'Out-of-scope verifier artifacts, logs, and screenshots are excluded from `accepted_source_fingerprint` and do not invalidate acceptance' "$surface"
-  grep -Fq 'Any HEAD/index/worktree/untracked/staged content change inside the exact `checkpoint_scope` invalidates acceptance.' "$surface"
-  grep -Fq 'Git status/diff are supplementary before/after evidence, not the fingerprint' "$surface"
+  grep -Fq '`accepted_source_fingerprint` is an ephemeral canonical SHA-256 of the exact `checkpoint_scope` working-tree records only' "$surface"
+  grep -Fq 'normalized repo-relative path, file/symlink type, executable mode' "$surface"
+  grep -Fq 'working-tree bytes SHA-256 or symlink target' "$surface"
+  grep -Fq 'HEAD/index/staging/mtime and out-of-scope paths are excluded' "$surface"
+  grep -Fq 'Staging/index-only changes leave `accepted_source_fingerprint` unchanged' "$surface"
+  grep -Fq 'any scoped content, type, mode, symlink, or deletion change invalidates' "$surface"
+  grep -Fq '`ui_evidence.py` validates the scope without mutating Git or the index' "$surface"
+  grep -Fq 'metadata sidecar' "$surface"
+  assert_absent 'Any HEAD/index/worktree/untracked/staged content change inside the exact `checkpoint_scope` invalidates acceptance.' "$surface"
+  assert_absent 'staged/unstaged/untracked inventory entries are filtered to the exact `checkpoint_scope`' "$surface"
+  grep -Fq 'Git status/diff remain supplementary before/after evidence, not the UI source fingerprint' "$surface"
 done
 
 # The PR checklist must not authorize video merely because it may aid review.
@@ -615,7 +621,7 @@ grep -Fq 'verifier recomputes `browser_evidence_hash` and rejects a mismatch.' "
 
 for surface in "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md"; do
   grep -Fq 'For user-visible UI, the Coordinator/main context is the browser executor and owner: it runs the visual/interactive checks and records the `coordinator_browser_evidence` packet.' "$surface"
-  grep -Fq 'For user-visible UI only, before human acceptance the Coordinator freezes one canonical `coordinator_browser_evidence` packet' "$surface"
+  grep -Fq 'For user-visible UI only, before final human acceptance the Coordinator freezes one canonical `coordinator_browser_evidence` packet' "$surface"
   grep -Fq 'The final acceptance envelope is immutable and repeats the packet/hash plus human evidence explicitly referencing the same hash.' "$surface"
   grep -Fq 'Any packet field, revision, artifact, or hash change invalidates acceptance and requires a new packet/hash and human acceptance' "$surface"
   grep -Fq 'If Coordinator/main cannot obtain the approved browser surface for user-visible UI, stop and report IAB unavailable/blocker; verifier-side browser unavailability alone is non-blocking when the valid packet and human acceptance are present.' "$surface"
@@ -655,9 +661,41 @@ assert_absent 'review_context_key = acceptance_criteria + risk + target_files' "
 assert_absent 'packets omit the threat model' "$POLICY" "$DELIVERY" "$AGENTS"
 
 assert_sequence "$VERIFIER" \
-  'For user-visible UI only, before human acceptance, verifier may run only non-mutating baseline, test-map, log-shape, or browser-plan checks.' \
-  'For user-visible UI only, only after the Coordinator records human UI/behavior acceptance evidence tied to checkpoint_token and checkpoint_scope and provides a valid `coordinator_browser_evidence` packet may verifier proceed.' \
+  'For user-visible UI only, before the Coordinator provides a provisional Coordinator packet, verifier may run only non-mutating baseline, test-map, log-shape, or browser-plan checks.' \
+  'For user-visible UI only, after the Coordinator identifies a coherent implementation checkpoint and provides a valid provisional Coordinator packet, verifier may proceed.' \
   'Validate the `coordinator_browser_evidence` packet read-only.'
+
+# UI evidence helper and deterministic material/non-material boundary.
+test -f "$UI_EVIDENCE"
+test -f "$UI_EVIDENCE_TEST"
+grep -Fq 'does not invoke Git' "$UI_EVIDENCE"
+grep -Fq 'normalize_scope' "$UI_EVIDENCE"
+grep -Fq 'source_fingerprint' "$UI_EVIDENCE"
+grep -Fq 'MATERIAL_PACKET_SCHEMA_VERSION = 1' "$UI_EVIDENCE"
+grep -Fq 'METADATA_FIELDS' "$UI_EVIDENCE"
+grep -Fq 'material_packet_hash' "$UI_EVIDENCE"
+grep -Fq 'automatic_fallback must be false' "$UI_EVIDENCE"
+grep -Fq 'evidence_artifacts' "$UI_EVIDENCE"
+grep -Fq 'scope path must be relative' "$UI_EVIDENCE"
+grep -Fq 'escapes the repository' "$UI_EVIDENCE"
+grep -Fq 'unsupported special file' "$UI_EVIDENCE"
+grep -Fq 'source fingerprint' "$ROOT/codex/skills/git-workflow/references/delivery.md"
+grep -Fq 'metadata sidecar' "$ROOT/codex/skills/git-workflow/references/delivery.md"
+python3 -m unittest -v codex/skills/git-workflow/tests/test_ui_evidence.py >/dev/null
+
+# Batch low-risk/reversible decisions and sparse delegated-stage waiting.
+for surface in "$POLICY" "$ROOT/codex/skills/git-workflow/SKILL.md" "$ISSUE_START"; do
+  grep -Fq 'Batch low-risk, reversible, and repository-pattern decisions with concrete acceptance criteria into one recommended plan.' "$surface"
+  grep -Fq 'Use one-question dig only for unresolved material decisions' "$surface"
+done
+for surface in "$POLICY" "$DELIVERY" "$AGENTS" "$ROOT/README.md" "$IMPLEMENTER" "$VERIFIER" "$REVIEWER"; do
+  grep -Fq 'one long event wait per delegated stage' "$surface"
+  grep -Fq 'at most one timeout/attention snapshot' "$surface"
+  grep -Fq 'Never poll unchanged state periodically' "$surface"
+  grep -Fq 'report only stage changes or a required sparse ongoing update' "$surface"
+done
+grep -Fq 'completion review runs before final human acceptance' "$REVIEWER"
+grep -Fq 'cannot substitute for human acceptance' "$REVIEWER"
 
 grep -Fq 'PR evidence skill link/unlink test passed.' <(bash "$ROOT/tests/setup-skills.sh")
 [[ -d "$PR_EVIDENCE_SKILL" ]] || { printf 'PR evidence skill directory missing.\n' >&2; exit 1; }

@@ -186,6 +186,40 @@ P0-P2、採用P3またはその他の変更は差分を再固定し、現在の�
 
 Reviewerはprogressなしのfinal-only短報とし、Coordinatorは完了通知を1回待つ。定期的なbusy pollをしない。findingがあればseverityとfile/line根拠を含め、なければ件数、fingerprint、残余risk、未検証範囲だけを返す。
 
+## External remote PR review lane
+
+`prr`で別PRをレビューする場合は、local completion reviewと明示的に分離する。External
+remote PR reviewは、既存のlocal Git objectだけを使う read-only
+`codex/skills/git-workflow/scripts/external_pr_snapshot.py` で、repository、PR number、exact
+40-character base/head SHA、unique merge-base、sorted changed paths、Git diff/object由来の
+canonical patch hashを固定する。missing、abbreviated/ambiguous、non-commit、unrelated history
+(no merge-base)、ambiguous merge-base、unsafe path/inputはfail closedとする。advanced baseは
+exact base SHAとcomputed merge-baseで表現し、base branchの現在値を代用しない。External laneは
+index/worktreeを読書きせず、stage、isolated checkout/source bundle、`review_fingerprint.py`
+を使わない。
+
+External laneのfast pathは新しいpersisted review-state mechanismを追加せず、同じPRを可能な
+限りowning coordinator Codex taskに留めて、そのtaskの既存review evidenceを使う。同じheadで
+snapshotの全material fieldが一致すればnew reviewerを作らず、prior valid result/findingsを
+保持する。headが変わった場合は先にprior unresolved findingのtarget paths/direct-impact
+identitiesを比較し、関連contentが不変でcredibleなmitigation pathがない限りblockerを再検出
+せず保持する。その後new delta/affected codeだけをreviewする。rename/deletionはblockerを
+自動clearしない。同じtask/lifecycleでreviewer identityが使える場合だけbounded `Round N`を
+同じsaved reviewerへ送り、fork/new rootではchild reviewer identityをinherit/persist/invent
+しない。identityが使えない場合は、実際にnew full reviewが必要なときだけ新しいlifecycleを
+開始する。
+
+Local completion reviewは従来どおり、complete intended scopeをstageして
+`scripts/review_fingerprint.py --base <base-ref>` を実行し、staged-tree fingerprintを正本と
+する。External snapshotはこのcompletion gateの代替ではない。
+
+PR commentの投稿は明示的なuser authorizationとescalation boundaryを維持する。通常のflowは
+operatorのexactly two stagesだけとし、最初の一回はrepository/PR/head/body file+SHA-256/exact
+command/expected effects/verificationを含むhead-bound structured preparation、次の一回は
+Coordinatorがapproval-bound commandを実行した後のone read-only verificationとする。zero-hop
+bypass、third correction round、automatic retry/duplicate、third correction stageは行わない。
+write直前にhead等を再検証し、mismatchはsilent correctionせず停止する。
+
 ## Merge and cleanup gates
 
 - required CIが未成功ならmergeしない。会話上のoverrideは認めない。

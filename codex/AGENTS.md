@@ -95,6 +95,32 @@ For non-UI checkpoints, after `checkpoint_token`/`checkpoint_scope` and implemen
 
 Coordinator wait contract: perform one long event wait per delegated stage; after a timeout or attention signal, take at most one timeout/attention snapshot. Never poll unchanged state periodically; report only stage changes or a required sparse ongoing update.
 
+## External `prr` review lane
+
+Reviewing another PR (`prr`) is an external remote-PR lane, separate from local completion review.
+Bind the read-only review to the repository, PR number, exact full base/head SHAs, unique merge-base,
+sorted changed paths, and canonical Git-object patch hash using
+`codex/skills/git-workflow/scripts/external_pr_snapshot.py`. It must reject missing, ambiguous,
+non-commit, unrelated/no-merge-base, and unsafe inputs, and must not stage files, materialize an
+isolated checkout/source bundle, or invoke `review_fingerprint.py`. An advanced base is represented
+by its exact supplied SHA plus the computed merge-base. The local completion path remains the staged
+tree `review_fingerprint.py` gate.
+
+Do not add a persisted review-state mechanism. Keep the same PR in its owning coordinator Codex task
+when possible. An unchanged head with matching snapshot identity reuses the prior valid result/findings
+without a new reviewer. For a changed head, compare unresolved finding target paths and direct-impact
+identities first; unchanged relevant content with no credible mitigation preserves blockers without
+re-detection, while new delta/affected code is reviewed. Rename/deletion never auto-clears blockers.
+Reuse a saved reviewer for bounded `Round N` only within the same task/lifecycle. A fork/new root
+cannot inherit, persist, or invent that child identity; if unavailable, create a fresh lifecycle only
+when a new full review is required.
+
+PR comment posting remains explicitly authorized. The normal operator flow has exactly two stages:
+one head-bound structured preparation with repository/PR/head/body file+hash/exact command/effects/
+verification, then after the Coordinator executes the approval-bound command, one read-only
+verification. No zero-hop bypass, third correction round, automatic correction/retry/duplicate, or
+third stage; revalidate head immediately before writing and stop on any mismatch.
+
 ## Speed-first implementation delegation
 
 - Coordinatorは親1つに対して同時に最大3つの子agentまでを使える。この上限は`implementer_luna`、`explorer_luna`、`verifier_luna`だけでなく、既存の`git_operator_luna`と`reviewer_luna`を含む全delegated roleの合計に適用する。実装ライフサイクルでは、独立した調査がある場合に`implementer_luna`、`explorer_luna`、`verifier_luna`を並列化するが、writerは常に`implementer_luna`の1つだけにする。`verifier_luna`の実装結果検証はcoherentな実装checkpoint後に行い、開始時は安全な非変異baseline、test map、browser planだけを独立実行できる。

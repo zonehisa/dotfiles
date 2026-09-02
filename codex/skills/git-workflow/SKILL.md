@@ -43,6 +43,14 @@ For user-visible UI delivery, also apply the PR Evidence Lifecycle in
 [references/delivery.md](references/delivery.md). Keep evidence review separate from completion
 diff review and do not upload through an API or `gh`.
 
+`prr` reviewing another PR uses the read-only external remote-PR lane in
+[references/code-review.md](references/code-review.md) and
+`scripts/external_pr_snapshot.py`; it binds the repository, PR number, exact base/head SHAs,
+merge-base, sorted paths, and canonical patch hash without staging, checkout/source-bundle
+materialization, or `review_fingerprint.py`. The local completion lane keeps the staged-tree
+`review_fingerprint.py` gate unchanged. PR comments retain explicit authorization and the exact
+two-operator-stage preparation/execution/verification boundary documented in that reference.
+
 When a request spans operations, read the references in execution order, loading each only when that operation begins. For example, `is` followed later by `cm` starts with `issue-start.md` and defers `delivery.md` until commit is requested.
 
 ## Minimal Context Detection

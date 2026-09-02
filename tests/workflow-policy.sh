@@ -12,6 +12,8 @@ EXPLORER="$ROOT/codex/agents/explorer-luna.toml"
 VERIFIER="$ROOT/codex/agents/verifier-luna.toml"
 UI_EVIDENCE="$ROOT/codex/skills/git-workflow/scripts/ui_evidence.py"
 UI_EVIDENCE_TEST="$ROOT/codex/skills/git-workflow/tests/test_ui_evidence.py"
+EXTERNAL_PR_SNAPSHOT="$ROOT/codex/skills/git-workflow/scripts/external_pr_snapshot.py"
+EXTERNAL_PR_SNAPSHOT_TEST="$ROOT/codex/skills/git-workflow/tests/test_external_pr_snapshot.py"
 PR_EVIDENCE_SKILL="$ROOT/codex/skills/pr-evidence-video"
 HANDOFF="$PR_EVIDENCE_SKILL/references/github-handoff.md"
 PARALLEL_SKILL="$ROOT/codex/skills/parallel-worktree/SKILL.md"
@@ -86,6 +88,54 @@ for marker in review_lifecycle_key review_round_key review_context_key; do
   grep -q "$marker" "$POLICY"
   grep -q "$marker" "$DELIVERY"
 done
+
+# External PR review must stay on its read-only Git-object lane; completion review
+# remains the only consumer of the staged-tree fingerprint.
+test -f "$EXTERNAL_PR_SNAPSHOT"
+test -f "$EXTERNAL_PR_SNAPSHOT_TEST"
+grep -Fq 'External remote PR review lane' "$POLICY"
+grep -Fq 'External `prr` review lane' "$ROOT/codex/AGENTS.md"
+grep -Fq 'external remote-PR lane' "$ROOT/codex/skills/git-workflow/SKILL.md"
+grep -Fq '外部PRレビュー (`prr`) と完了レビュー' "$ROOT/README.md"
+grep -Fq 'external_pr_snapshot.py' "$DELIVERY"
+grep -Fq 'external_pr_snapshot.py' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+grep -Fq 'review_fingerprint.py --base <base-ref>' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+grep -Fq 'stage files' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+grep -Fq 'isolated checkout/source bundle' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+assert_wrapped_phrase 'Useful discovery/triage commands (non-authoritative only; never use their output as completion or external review evidence)' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+assert_wrapped_phrase 'normal path has exactly two operator stages' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+grep -Fq 'third correction round' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+grep -Fq 'no persisted review-state store' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+grep -Fq 'unchanged head' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+grep -Fq 'target paths and direct-impact identities' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+grep -Fq 'fork or new root cannot inherit' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+assert_wrapped_phrase 'start a fresh lifecycle only when a new full review is actually required' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+assert_wrapped_phrase 'Keep the same PR in its owning coordinator Codex task' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+assert_wrapped_phrase '同じPRを可能な限りowning coordinator Codex task' "$ROOT/README.md"
+grep -Fq 'prior valid result and findings' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+grep -Fq 'preserve the blockers without re-detecting them' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+grep -Fq 'Deletions and renames never auto-clear a blocker' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+assert_wrapped_phrase 'When the head changes, compare prior unresolved finding target paths and direct-impact identities first.' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+assert_wrapped_phrase 'If those relevant contents are unchanged and no credible mitigation path exists, preserve the blockers without re-detecting them' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+assert_wrapped_phrase 'review the new delta and affected code' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+assert_wrapped_phrase 'one read-only verification' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+grep -Fq 'mismatch stops the operation' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+assert_wrapped_phrase 'Revalidate the exact head immediately before the write' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+assert_wrapped_phrase 'There is no zero-hop bypass, third correction round' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+grep -Fq 'completion lane must not use an external PR snapshot' "$ROOT/codex/skills/git-workflow/references/code-review.md"
+grep -Fq 'external_pr_snapshot.py' "$ROOT/codex/agents/git-operator-luna.toml"
+grep -Fq 'external-PR snapshot' "$ROOT/codex/agents/reviewer-luna.toml"
+grep -Fq 'GIT_NO_LAZY_FETCH' "$EXTERNAL_PR_SNAPSHOT"
+grep -Fq '"diff-tree"' "$EXTERNAL_PR_SNAPSHOT"
+python3 - "$EXTERNAL_PR_SNAPSHOT" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]).read_text()
+for forbidden in ("review_fingerprint.py", "update-index", "read-tree", "worktree add", "tempfile"):
+    if forbidden in source:
+        raise SystemExit(f"External PR helper must not contain completion/checkout operation: {forbidden}")
+PY
 
 grep -q 'both round and context keys are unchanged' "$DELIVERY"
 grep -q 'no duplicate sends' "$POLICY"
@@ -682,6 +732,7 @@ grep -Fq 'unsupported special file' "$UI_EVIDENCE"
 grep -Fq 'source fingerprint' "$ROOT/codex/skills/git-workflow/references/delivery.md"
 grep -Fq 'metadata sidecar' "$ROOT/codex/skills/git-workflow/references/delivery.md"
 python3 -m unittest -v codex/skills/git-workflow/tests/test_ui_evidence.py >/dev/null
+python3 -m unittest -v codex/skills/git-workflow/tests/test_external_pr_snapshot.py >/dev/null
 
 # Batch low-risk/reversible decisions and sparse delegated-stage waiting.
 for surface in "$POLICY" "$ROOT/codex/skills/git-workflow/SKILL.md" "$ISSUE_START"; do

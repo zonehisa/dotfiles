@@ -1,5 +1,10 @@
 # Delivery Workflows
 
+This reference governs the local completion lane. An external remote PR review (`prr`) uses the
+read-only `external_pr_snapshot.py` lane defined in [code-review.md](code-review.md); it never
+stages files, materializes a checkout/source bundle, or invokes `review_fingerprint.py`. The local
+completion staged-tree fingerprint and review gate below remain unchanged.
+
 ## Risk-Routed Diff Review Gate
 
 Run this gate once after implementation and user-feedback iterations are verified, when the user explicitly requests review, or immediately before completion, commit, or PR preparation. Do not run it after every TDD or UI-adjustment loop. Skip only typo, copy, comment, or obvious formatting-only changes.

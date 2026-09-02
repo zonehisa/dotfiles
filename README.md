@@ -117,6 +117,37 @@ only local, privacy-reviewed, muted evidence with a manifest when the user expli
 Never install Remotion globally or in an application checkout. The current dotfiles/configuration
 change itself is non-user-visible and uses `Not required (non-user-visible change)`.
 
+### 外部PRレビュー (`prr`) と完了レビュー
+
+別PRをレビューする `prr` は、現在の実装を完了前に確認する local completion review と別の
+read-only laneです。ローカルGit objectに存在する exact 40文字の base/head SHA と PR number
+を、次の helper で repository、unique merge-base、sorted changed paths、Git diff/object由来の
+canonical patch hashへ固定します。
+
+```bash
+python3 codex/skills/git-workflow/scripts/external_pr_snapshot.py \
+  --repo <repository> --pr-number <number> \
+  --base-sha <40-character-base-sha> --head-sha <40-character-head-sha>
+```
+
+missing/ambiguous/non-commit/unrelated/no-merge-base/unsafe inputは停止します。advanced baseは
+指定されたbase SHAとcomputed merge-baseで扱い、base branch名の現在値を代用しません。External
+laneはworktree/indexを変更せず、stage、isolated checkout/source bundle、
+`review_fingerprint.py`を使いません。Local completion reviewは従来どおり完全な対象をstageし、
+staged-treeの`review_fingerprint.py --base <base-ref>`を正本として使います。
+
+External laneのfast pathは永続的なreview-state storeを追加せず、同じPRを可能な限りowning
+coordinator Codex taskで扱います。同じheadでsnapshotが一致すればreviewerを増やさずprior
+result/findingsを保持し、head変更時はunresolved findingのtarget path/direct-impact identityを
+先に比較します。関連contentが不変でmitigation pathがなければblockerを再検出せず保持し、new
+delta/affected codeだけを確認します。fork/new rootはchild reviewer identityを引き継がず、
+実際にfull reviewが必要な場合だけ新しいlifecycleを始めます。
+
+PR commentは明示的な認可が必要です。通常はoperatorのhead-bound structured preparation（repo/
+PR/head/body file+hash/exact command/effects/verification）一回、Coordinatorのapproval-bound
+execution後にone read-only verification一回のexactly two stagesとし、third correction roundや
+mismatchで停止します。
+
 ## コマンド
 
 ### `setup.sh`

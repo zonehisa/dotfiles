@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build and validate deterministic evidence for user-visible UI deliveries.
 
-This helper intentionally does not invoke Git.  The UI source fingerprint describes the
-working-tree content of an explicit, safe scope; review_fingerprint.py remains the source of
-truth for staged-tree review evidence.
+This helper intentionally does not invoke Git. The UI source fingerprint describes only the
+explicit changed-path scope using deterministic path/type/Git-mode/blob records; review_fingerprint.py
+remains the source of truth for staged-target review evidence.
 """
 
 from __future__ import annotations
@@ -177,8 +177,21 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _git_mode(metadata: os.stat_result) -> str:
+    """Return the Git mode recorded for a regular file or symlink."""
+
+    if stat.S_ISLNK(metadata.st_mode):
+        return "120000"
+    return "100755" if metadata.st_mode & stat.S_IXUSR else "100644"
+
+
 def source_records(repo: os.PathLike[str] | str, scope: Sequence[str] | Iterable[str]) -> list[dict[str, str]]:
-    """Describe every scoped regular file or safe symlink in deterministic order."""
+    """Describe only the explicit target paths using deterministic blob/mode records.
+
+    The scope is the caller's changed-path set.  Git/index state, mtimes, and files outside
+    that scope are intentionally not consulted.  ``sha256`` is retained as a compatibility
+    alias for regular-file callers; the canonical fingerprint uses ``blob`` and ``mode``.
+    """
 
     root = _repo_root(repo)
     normalized_scope = normalize_scope(scope)
@@ -191,14 +204,15 @@ def source_records(repo: os.PathLike[str] | str, scope: Sequence[str] | Iterable
         except OSError as error:
             raise UIEvidenceError(f"cannot inspect scoped path: {relative_path}") from error
 
-        mode = stat.S_IMODE(metadata.st_mode)
-        mode_text = f"{mode:04o}"
+        mode_text = _git_mode(metadata)
         if stat.S_ISREG(metadata.st_mode):
+            blob = _file_sha256(path)
             records.append(
                 {
+                    "blob": blob,
                     "mode": mode_text,
                     "path": relative_path,
-                    "sha256": _file_sha256(path),
+                    "sha256": blob,
                     "type": "file",
                 }
             )
@@ -207,8 +221,10 @@ def source_records(repo: os.PathLike[str] | str, scope: Sequence[str] | Iterable
                 target = os.readlink(path)
             except OSError as error:
                 raise UIEvidenceError(f"cannot read scoped symlink: {relative_path}") from error
+            target_bytes = os.fsencode(target)
             records.append(
                 {
+                    "blob": hashlib.sha256(target_bytes).hexdigest(),
                     "mode": mode_text,
                     "path": relative_path,
                     "target": target,
@@ -224,9 +240,18 @@ def source_records(repo: os.PathLike[str] | str, scope: Sequence[str] | Iterable
 
 
 def source_fingerprint(repo: os.PathLike[str] | str, scope: Sequence[str] | Iterable[str]) -> str:
-    """Hash only the normalized scoped working-tree records, never Git/index state."""
+    """Hash only normalized changed-path blob/mode records, never Git/index state."""
 
-    return hashlib.sha256(canonical_json_bytes(source_records(repo, scope))).hexdigest()
+    records = source_records(repo, scope)
+    canonical_records = [
+        {
+            key: record[key]
+            for key in ("blob", "mode", "path", "target", "type")
+            if key in record
+        }
+        for record in records
+    ]
+    return hashlib.sha256(canonical_json_bytes(canonical_records)).hexdigest()
 
 
 # Descriptive aliases keep call sites readable without introducing another state mechanism.

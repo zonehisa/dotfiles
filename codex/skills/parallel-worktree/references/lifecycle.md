@@ -1,5 +1,9 @@
 # Lifecycle
 
+Use this lifecycle only when work is parallel, the primary checkout is dirty, the task must run in
+the background/for a long time, or the user explicitly requests isolation. A clean single-foreground
+task remains in the current checkout and does not need this skill.
+
 ## Responsibility Boundary
 
 This skill owns primary-checkout protection, base selection, registry/lease management, worktree ownership, resource reservations, task tracking, and cleanup. Delegate implementation, TDD, commit, review, and PR conventions to `git-workflow`. Delegate cross-repository or shared-contract work to `issue-orchestrator`.
@@ -21,6 +25,9 @@ The three cleanup transitions are helper-owned: `cleanup-prepare`, `cleanup-auth
 Exceptional states are `blocked`, `drifted`, `orphaned`, `failed`, and `cleanup_failed`. Store `resume_state` before entering a recoverable exceptional state.
 
 ## Start
+
+The conditional Worktree decision is made before provisioning. Do not create a Worktree merely to
+delegate ordinary implementation or read-only inspection.
 
 ### Read-only preparation
 
@@ -82,7 +89,7 @@ Legacy v1 registries remain readable for status, resume, and cleanup recovery. S
 
 | Risk | Plan | Implementation/TDD | Completion review |
 |---|---|---|---|
-| R0 | Sol medium | `implementer_luna`: GPT-5.6 Luna `max`, workspace-write | Skip |
-| R1 | Sol medium | `implementer_luna`: GPT-5.6 Luna `max`, workspace-write | Fresh-context `reviewer_luna`: Luna `max`, read-only |
-| R2 | Sol high | `implementer_luna`: GPT-5.6 Luna `max`, workspace-write | Fresh-context `reviewer_luna`: Luna `max`, read-only |
-| R3-R4 | Sol xhigh | `implementer_luna`: GPT-5.6 Luna `max`, workspace-write | Fresh-context `reviewer_luna`: Luna `max`, read-only |
+| R0 | Sol medium | Coordinator/main; optional isolated implementer | Skip |
+| R1 | Sol medium | Coordinator/main; optional isolated `implementer_luna` (Luna `max`) | Fresh-context `reviewer_luna`: Luna `max`, read-only |
+| R2 | Sol high | Coordinator/main; optional isolated `implementer_luna` (Luna `max`) | Fresh-context `reviewer_luna`: Luna `max`, read-only |
+| R3-R4 | Sol xhigh | Coordinator/main or isolated `implementer_luna` (Luna `max`) | Fresh-context `reviewer_luna`: Luna `max`, read-only |

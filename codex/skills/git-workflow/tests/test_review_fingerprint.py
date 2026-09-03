@@ -99,7 +99,8 @@ class ReviewFingerprintTest(unittest.TestCase):
             self.run_git(repo, "add", "tracked.txt")
             transferred = self.fingerprint(repo)
 
-            self.assertNotEqual(reviewed["artifact_hash"], transferred["artifact_hash"])
+            # Commit metadata is deliberately outside the path fingerprint.
+            self.assertEqual(reviewed["artifact_hash"], transferred["artifact_hash"])
             self.assertEqual(reviewed["patch_base_tree"], transferred["patch_base_tree"])
             self.assertEqual(reviewed["patch_hash"], transferred["patch_hash"])
             self.assertEqual(reviewed["head_tree"], transferred["head_tree"])
@@ -147,7 +148,7 @@ class ReviewFingerprintTest(unittest.TestCase):
             self.assertEqual(reviewed["patch_hash"], committed["patch_hash"])
             self.assertTrue(committed["index_matches_head"])
 
-    def test_artifact_hash_remains_compatible_with_legacy_approved_state(self) -> None:
+    def test_artifact_hash_uses_changed_path_blobs_and_ignores_untracked_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
             self.run_git(repo, "init", "-q", "-b", "main")
@@ -162,7 +163,16 @@ class ReviewFingerprintTest(unittest.TestCase):
 
             measured = self.fingerprint(repo)
 
-            self.assertEqual(self.legacy_artifact_hash(repo), measured["artifact_hash"])
+            self.assertNotEqual(self.legacy_artifact_hash(repo), measured["artifact_hash"])
+            self.assertEqual(measured["fingerprint_scope"], "changed-paths-blob-mode")
+            self.assertEqual([entry["path"] for entry in measured["changed_paths"]], ["tracked.txt", "untracked.txt"])
+
+            (repo / "unrelated.log").write_text("ignored by the staged target\n")
+            unchanged = self.fingerprint(repo)
+            self.assertEqual(measured["path_fingerprint"], unchanged["path_fingerprint"])
+
+            before_mode = measured["changed_paths"][0]["after"]["mode"]
+            self.assertEqual(before_mode, "100644")
 
     @unittest.skipIf(os.name == "nt", "Git executable-bit behavior is POSIX-specific")
     def test_owner_execute_bit_changes_patch_evidence(self) -> None:

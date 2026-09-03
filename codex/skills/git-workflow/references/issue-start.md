@@ -1,38 +1,53 @@
 # Start Issue Work
 
-## Model and operator boundaries
+Use this reference only when starting or triaging work for a specific Issue. Keep the normal path
+small: the Coordinator/main owns local inspection, planning, implementation, and targeted tests.
 
-- Keep the global default model unchanged.
+## Defaults
 
-## Git workflow operator contract
+- Keep the configured global model default unless the user explicitly changes it.
+- Read the repository status, current branch, remotes, Issue, relevant specifications, and tests
+  directly in the Coordinator/main context. Do not spawn `git_operator_luna` merely for reads.
+- A clean, single, foreground task stays in the current checkout and does not require a Worktree or
+  `implementer_luna` child.
+- Use a Worktree only for parallel work, a dirty primary checkout, background/long-running work, or
+  explicit isolation. Read [parallel-worktree](../../parallel-worktree/SKILL.md) when that condition applies.
 
-- `is` Git/GitHub discovery, target resolution, and command preparation use the saved `git_operator_luna` (`fork_turns = "none"`, GPT-5.6 Luna `max`, workspace-write); keep this operator fixed and do not re-delegate it.
-- When a prepared mutation needs runtime approval, require the operator to return the exact command and resolved targets, then have the coordinator execute that command against the user's direct authorization as specified in `SKILL.md`.
-- Implementation planning/TDD uses the coordinator-owned saved `implementer_luna` (`fork_turns = "none"`, GPT-5.6 Luna `max`, workspace-write); keep it fixed and do not mutate or re-delegate the saved operator lifecycle.
+## Conditional roles
+
+- Use the saved `git_operator_luna` only for an explicitly authorized external Git/GitHub write such
+  as Issue/PR creation, push, merge, or comment. Give it the exact repository, target, operation, and
+  authorization; an unavailable operator stops that external-write operation.
+- Use the saved `implementer_luna` only when the Coordinator explicitly selects parallel, dirty,
+  background/long-running, isolated, or explicitly delegated high-risk implementation. It is then the
+  sole source writer for that isolated lifecycle and must not delegate further.
+- Use `explorer_luna` or `verifier_luna` only for their bounded read-only roles when the selected
+  lifecycle needs them. Completion review remains the separate fresh-context `reviewer_luna` gate.
 
 ## Workflow
 
-1. Confirm there are no unrelated uncommitted changes before switching branches.
-2. Have the saved `git_operator_luna` inspect and prepare Git/GitHub startup operations, then read the selected Issue and repository-specific Issue-start instructions. Let the operator execute authorized commands that do not need runtime approval; route approval-bound commands through the coordinator without changing their targets or effects.
-3. Inspect relevant specifications, code, and tests before asking questions.
-4. For investigation-heavy or recurring defects, inspect meaningful write/read paths, background paths, validation, state transitions, UI entry points, and boundaries such as null, dates, terminal states, multiple records, and association changes.
-5. Suggest at most three related Issues only when the connection is strong; never include them without approval.
-6. Use Plan as the default pre-implementation workflow:
-   - establish the goal, users, scope, success criteria, acceptance scenarios, and test approach
-   - confirm at least one concrete user scenario before finalizing user-visible behavior or workflow changes
-   - Batch low-risk, reversible, and repository-pattern decisions with concrete acceptance criteria into one recommended plan.
-   - Use one-question dig only for unresolved material decisions whose answers materially change UI interaction, workflows, state transitions, authorization, or competing designs; return to Plan when those decisions are resolved.
-   - skip full `dig` for small bugs with clear reproduction and expected behavior, copy/comment changes, and straightforward internal changes
-7. Convert confirmed scenarios into acceptance criteria. Hand implementation planning/TDD to the coordinator-owned saved `implementer_luna` (`fork_turns = "none"`, GPT-5.6 Luna `max`, workspace-write) without mutating or re-delegating the saved `git_operator_luna` lifecycle.
-8. Fetch origin and create a branch directly from the detected default branch using repository naming conventions. Fall back to `bugfix/#123-description`, `docs/#123-description`, `refactor/#123-description`, or `feature/#123-description` by change type. In an active `parallel-worktree` lifecycle, do not run these mutations directly: select the planned branch name, then request its `pw-helper` to fetch/create the registered branch with the current operation ID.
-9. Save current Issue context when `.agent/state/` exists or repository docs require it.
-10. Report the Issue, branch, state file, planning outcome, and unresolved decisions. Do not commit or create a PR.
+1. Run `git status --short`, identify staged/unstaged/untracked work, and preserve unrelated changes.
+2. Resolve the Issue and repository target, then inspect the relevant code, policy, and tests before
+   asking questions. Use at most three related Issues only when the relationship is strong and useful.
+3. Select the current-checkout default or the conditional Worktree/role route above. Do not switch a
+   dirty checkout or overwrite another lifecycle's files.
+4. Use Plan/TDD for workflow changes: state scope, success criteria, acceptance scenarios, risks, and
+   targeted tests. Use one-question dig only for an unresolved material decision.
+5. Implement the smallest change in the selected writer context and run targeted tests. For UI, follow
+   `delivery.md`: Coordinator-owned IAB evidence, verifier before human acceptance, review, then one
+   final IAB plus human appearance/primary-behavior acceptance.
+6. Save required Issue context only when repository conventions require it. Do not commit, push, merge,
+   or create a PR from this reference; those are separate explicitly authorized delivery operations.
+7. Report the Issue, branch or checkout, changed paths, tests, and unresolved decisions.
 
-If the current mode prohibits mutations, complete investigation and planning first, then create the branch after returning to an execution-capable mode.
+If the current mode prohibits a local mutation, complete investigation and planning first, then resume
+in an execution-capable mode. Missing authorization is never inferred from the Issue or branch name.
 
 Useful commands:
 
 ```bash
+git status --short
+git branch --show-current
 gh issue view <number> --repo <owner/repo>
 git fetch origin
 git checkout -b <branch-name> origin/<default-branch>

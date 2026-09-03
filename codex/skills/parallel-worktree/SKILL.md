@@ -37,9 +37,14 @@ Use `scripts/pw-helper` for deterministic registry, lock, fingerprint, ownership
 ## Risk And Workflow Delegation
 
 - R0-R1 Plan: Sol `medium`; R2 Plan: Sol `high`; R3-R4 Plan: Sol `xhigh`.
-- Implementation/TDD: `implementer_luna`, GPT-5.6 Luna `max`, workspace-write.
-- Completion review: use the existing `git-workflow` R0-R4 review mapping.
-- Within this lifecycle, the registered owner/coordinator may delegate source edits only to its single saved `implementer_luna`; no other desktop task or subagent may write source or address review findings. All Git mutations still go through `pw-helper`.
+- Clean, single, foreground implementation stays with Coordinator/main. Delegate source edits to
+  one saved `implementer_luna` (GPT-5.6 Luna `max`, workspace-write) only for parallel work, a dirty
+  checkout, background/long-running work, explicit isolation, or a high-risk implementation.
+- Completion review uses the existing `git-workflow` R0-R4 mapping: R1-R4 use a fresh-context
+  `reviewer_luna` with GPT-5.6 Luna `max` and read-only access. The registered owner/coordinator may
+  use one saved implementer for source fixes; no second writer or nested delegation is allowed.
+- All Git mutations still go through `pw-helper` in an active Worktree lifecycle. Read-only inspection
+  does not require `git_operator_luna`.
 
 ## Version Policy
 

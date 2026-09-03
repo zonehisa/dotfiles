@@ -303,6 +303,83 @@ def intended_tree(repo: Path, read_env: dict[str, str]) -> str:
         return git("write-tree", cwd=repo, env=env)
 
 
+def tree_entries(repo: Path, tree: str, read_env: dict[str, str]) -> dict[bytes, tuple[bytes, bytes, bytes]]:
+    """Return the Git mode, object type, and object id for every path in a tree."""
+
+    output = git_bytes("ls-tree", "-r", "-z", tree, "--", cwd=repo, env=read_env)
+    entries: dict[bytes, tuple[bytes, bytes, bytes]] = {}
+    for record in output.split(b"\0"):
+        if not record:
+            continue
+        try:
+            header, raw_path = record.split(b"\t", 1)
+            mode, object_type, object_id = header.split(b" ", 2)
+        except ValueError as error:
+            raise RuntimeError("cannot parse Git tree entry") from error
+        entries[raw_path] = (mode, object_type, object_id)
+    return entries
+
+
+def changed_path_records(
+    repo: Path,
+    base_tree: str,
+    target_tree: str,
+    read_env: dict[str, str],
+    target_entries: dict[bytes, tuple[bytes, bytes, bytes]] | None = None,
+) -> list[dict[str, object]]:
+    """Describe only paths whose tree mode or object changed between base and target.
+
+    The returned records intentionally omit commits, index state, mtimes, untracked files,
+    and unrelated paths.  A before/after object id is retained so additions, deletions, and
+    mode-only changes remain distinguishable while a commit can be transferred unchanged.
+    """
+
+    before = tree_entries(repo, base_tree, read_env)
+    # `intended_tree()` builds the target tree in an isolated object store so the
+    # real repository is not mutated.  Use the staged index entries for the target
+    # side rather than trying to read that temporary tree after it is cleaned up.
+    after = target_entries if target_entries is not None else tree_entries(repo, target_tree, read_env)
+    records: list[dict[str, object]] = []
+    for raw_path in sorted(set(before) | set(after)):
+        before_entry = before.get(raw_path)
+        after_entry = after.get(raw_path)
+        if before_entry == after_entry:
+            continue
+
+        def normalize(entry: tuple[bytes, bytes, bytes] | None) -> dict[str, str] | None:
+            if entry is None:
+                return None
+            mode, object_type, object_id = entry
+            return {
+                "blob": object_id.decode("ascii"),
+                "mode": mode.decode("ascii"),
+                "type": object_type.decode("ascii"),
+            }
+
+        records.append(
+            {
+                "after": normalize(after_entry),
+                "before": normalize(before_entry),
+                "path": os.fsdecode(raw_path),
+            }
+        )
+    return records
+
+
+def changed_path_fingerprint(records: list[dict[str, object]]) -> str:
+    """Hash the canonical changed-path records only."""
+
+    payload = {"paths": records, "version": 2}
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=True,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Fingerprint the staged Git tree and its review base without changing the repository index.",
@@ -310,7 +387,7 @@ def main() -> None:
     parser.add_argument("--base", required=True, help="Review base ref, for example origin/main")
     parser.add_argument(
         "--content-base",
-        help="Commit used to identify changed paths; defaults to HEAD. Pass the reviewed HEAD after committing.",
+        help="Compatibility metadata for the reviewed content base; defaults to HEAD. The path-only hash uses --patch-base.",
     )
     parser.add_argument(
         "--patch-base",
@@ -329,48 +406,34 @@ def main() -> None:
     head_tree = git("rev-parse", "HEAD^{tree}", cwd=repo, env=read_env)
     patch_base_tree = git("rev-parse", f"{patch_base}^{{tree}}", cwd=repo, env=read_env)
     ensure_clean_submodules(repo, read_env)
-    submodule_status = git_bytes("submodule", "status", "--recursive", cwd=repo, env=read_env)
-    tracked_patch = git_bytes("diff", "--cached", "--binary", "HEAD", "--", cwd=repo, env=read_env)
-    untracked_output = git_bytes(
-        "ls-files", "--others", "--exclude-standard", "-z", cwd=repo, env=read_env
-    )
-    untracked_paths = sorted(path for path in untracked_output.split(b"\0") if path)
     intended_tree_hash = intended_tree(repo, read_env)
-
-    fingerprint = hashlib.sha256()
-    fingerprint.update(b"base\0" + base_commit.encode() + b"\0")
-    fingerprint.update(b"head\0" + head_commit.encode() + b"\0")
-    fingerprint.update(b"tracked-diff\0" + tracked_patch + b"\0")
-    fingerprint.update(b"submodules\0" + submodule_status + b"\0")
-
-    for raw_path in untracked_paths:
-        path = repo / os.fsdecode(raw_path)
-        fingerprint.update(b"untracked\0" + raw_path + b"\0")
-        fingerprint.update(str(path.lstat().st_mode).encode() + b"\0")
-        if path.is_symlink():
-            fingerprint.update(os.readlink(path).encode(errors="surrogateescape"))
-        else:
-            fingerprint.update(path.read_bytes())
-        fingerprint.update(b"\0")
-
-    patch_fingerprint = hashlib.sha256()
-    patch_fingerprint.update(b"patch-base-tree\0" + patch_base_tree.encode() + b"\0")
-    patch_fingerprint.update(b"intended-tree\0" + intended_tree_hash.encode() + b"\0")
-
-    content_fingerprint = hashlib.sha256()
-    content_fingerprint.update(b"content-base\0" + content_base.encode() + b"\0")
-    content_fingerprint.update(b"intended-tree\0" + intended_tree_hash.encode() + b"\0")
+    staged_entries = staged_index_entries(repo, read_env)
+    target_entries = {
+        raw_path: (mode, b"commit" if mode == b"160000" else b"blob", object_id)
+        for raw_path, (mode, object_id) in staged_entries.items()
+    }
+    changed_paths = changed_path_records(
+        repo,
+        patch_base_tree,
+        intended_tree_hash,
+        read_env,
+        target_entries=target_entries,
+    )
+    path_fingerprint = changed_path_fingerprint(changed_paths)
 
     print(json.dumps({
-        "artifact_hash": fingerprint.hexdigest(),
+        "artifact_hash": path_fingerprint,
         "base_commit": base_commit,
         "content_base": content_base,
-        "content_hash": content_fingerprint.hexdigest(),
+        "content_hash": path_fingerprint,
+        "changed_paths": changed_paths,
+        "fingerprint_scope": "changed-paths-blob-mode",
         "head_tree": head_tree,
         "head_commit": head_commit,
         "patch_base": patch_base,
         "patch_base_tree": patch_base_tree,
-        "patch_hash": patch_fingerprint.hexdigest(),
+        "patch_hash": path_fingerprint,
+        "path_fingerprint": path_fingerprint,
         "index_matches_head": intended_tree_hash == head_tree,
     }, sort_keys=True))
 

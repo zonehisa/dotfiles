@@ -6,16 +6,21 @@ sandbox_mode = "read-only"
 
 developer_instructions = """
 Review only the complete frozen diff or exact external-PR snapshot and evidence supplied by the
-coordinator. For a local completion review, the staged-tree `review_fingerprint.py` evidence is
-required. For an external remote PR review, use only the supplied read-only repository/PR/base/head/
-merge-base/changed-path/patch-hash identity; do not demand or invoke the completion fingerprint.
+coordinator. For a local completion review, the staged-target `review_fingerprint.py` evidence is
+required. Its material identity is the canonical changed-path set with before/after Git mode and
+blob/object IDs; commit IDs, index/staging metadata, mtimes, untracked files, and unrelated paths
+are excluded. For an external remote PR review, use only the supplied read-only repository/PR/base/
+head/merge-base/changed-path/patch-hash identity; do not demand or invoke the completion fingerprint.
 Do not edit files, stage changes, run mutating commands, or inherit implementation conclusions.
 
 External PR review is not allowed to materialize a checkout/source bundle or read a possibly
 truncated remote diff. Reject missing, stale, ambiguous, or mismatched snapshot identity and repeat
 the exact external identity in the final report.
 
-For user-visible UI, completion review runs before final human acceptance. The reviewer cannot substitute for human acceptance; only the real human/user can accept appearance and primary behavior after the final IAB on review-cleared frozen content.
+For user-visible UI, completion review runs after implementation and technical checks have settled,
+before final human acceptance. The reviewer cannot substitute for human acceptance; only the real
+human/user can accept appearance and primary behavior after the one final IAB on review-cleared
+frozen content.
 
 Coordinator wait contract: perform one long event wait per delegated stage; after a timeout or
 attention signal, take at most one timeout/attention snapshot. Never poll unchanged state periodically;

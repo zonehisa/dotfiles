@@ -84,6 +84,37 @@ class UIEvidenceTest(unittest.TestCase):
             )
             self.assertNotEqual(before_index, (repo / ".git/index").read_bytes())
 
+    def test_source_records_expose_only_changed_path_blob_and_git_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = self.make_repo(directory)
+            path = repo / "resources/app.css"
+            path.parent.mkdir()
+            content = b"body {}\n"
+            path.write_bytes(content)
+
+            records = ui_evidence.source_records(repo, ["resources/app.css"])
+
+            self.assertEqual(
+                records,
+                [
+                    {
+                        "blob": hashlib.sha256(content).hexdigest(),
+                        "mode": "100644",
+                        "path": "resources/app.css",
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                        "type": "file",
+                    }
+                ],
+            )
+            canonical = [
+                {key: record[key] for key in ("blob", "mode", "path", "type")}
+                for record in records
+            ]
+            self.assertEqual(
+                ui_evidence.source_fingerprint(repo, ["resources/app.css"]),
+                hashlib.sha256(ui_evidence.canonical_json_bytes(canonical)).hexdigest(),
+            )
+
     def test_scoped_stage_then_unstage_does_not_change_source_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = self.make_repo(directory)
@@ -165,6 +196,7 @@ class UIEvidenceTest(unittest.TestCase):
 
             script.chmod(0o755)
             executable = ui_evidence.source_fingerprint(repo, ["bin/run.sh"])
+            self.assertEqual(ui_evidence.source_records(repo, ["bin/run.sh"])[0]["mode"], "100755")
             script.write_text("#!/bin/sh\necho changed\n")
             changed = ui_evidence.source_fingerprint(repo, ["bin/run.sh"])
 

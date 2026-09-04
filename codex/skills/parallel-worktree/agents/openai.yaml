@@ -3,4 +3,4 @@ interface:
   short_description: "主作業を保護してIssue専用Worktreeを安全に管理"
   default_prompt: "Use $parallel-worktree to start, inspect, resume, or clean up an isolated Issue worktree."
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true

@@ -1,19 +1,20 @@
 # Delivery workflow
 
-Read this reference only at an implementation, review, commit, PR, or cleanup boundary. The
-normal clean single-foreground path is owned by Coordinator/main; delegated roles and Worktrees
-are conditional rather than mandatory.
+Read this reference only at an implementation, review, commit, PR, or cleanup boundary. R0 may use a
+clean single-foreground checkout; R1-R4 Issue deliveries use an Issue-dedicated Worktree from the latest
+remote default branch. The Coordinator/main role remains the owner of the selected Worktree.
 
 ## Route and preparation
 
-- Coordinator/main may inspect Git/GitHub, resolve targets, plan, edit source, and run targeted
-  tests directly. Use `git_operator_luna` only for an authorized external write (Issue/PR,
-  push, comment, merge, or cleanup) or an explicitly isolated Git operation.
-- Use `implementer_luna` only for parallel, dirty-checkout, background/long-running, explicitly
-  isolated, or high-risk implementation. It is a single Luna `max` writer and never commits,
-  pushes, creates a PR, or spawns another writer.
-- Use a Worktree only for parallel work, a dirty primary checkout, background work, or explicit
-  isolation. Preserve all unrelated staged, unstaged, untracked, and ignored files.
+- Coordinator/main performs discovery and planning, may implement R0 directly, and may edit/test directly
+  inside the selected R1-R4 Worktree. Before source edits, verify the Worktree realpath and branch; preserve
+  the primary checkout and all unrelated staged, unstaged, untracked, and ignored files.
+- Use `implementer_luna` only for parallel, dirty-checkout, background/long-running, explicitly delegated,
+  or high-risk implementation. It is a single Luna `max` writer and never commits, pushes, creates a PR,
+  or spawns another writer. A default Worktree alone does not require this child.
+- For every new R1-R4 Issue, run one bounded `git fetch origin`, freeze `origin/<default-branch>` as the base,
+  and provision the dedicated Worktree before source edits. Do not `pull` the primary checkout or create an
+  independent Codex task merely to obtain this isolation.
 - Completion review remains separate: R1-R4 use a fresh-context `reviewer_luna` with
   `fork_turns="none"`, GPT-5.6 Luna `max`, and read-only access. R0 (copy, comments, obvious
   formatting) may skip review.

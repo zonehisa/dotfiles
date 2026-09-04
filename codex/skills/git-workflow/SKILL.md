@@ -25,11 +25,15 @@ Handle Git and GitHub work using repository conventions discovered at runtime.
   saved `git_operator_luna` only when that operation begins and exact user authorization is present. The
   operator does not own local source edits or completion review; if unavailable, stop the external-write
   operation rather than substitute another model.
-- Coordinator/main owns normal clean single foreground implementation and targeted tests. Use the saved
-  `implementer_luna` only for parallel, dirty-checkout, background/long-running, explicit isolation, or
-  explicitly delegated high-risk work; then it is the sole writer for that lifecycle.
-- Use a Worktree only for parallel, dirty-primary, background/long-running, or explicit isolation; keep
-  clean single foreground work in the current checkout.
+- R0 copy/comment/obvious-formatting work may be implemented by Coordinator/main in a clean checkout.
+- R1-R4 work for a new Issue defaults to a dedicated Worktree created from a freshly fetched
+  `origin/<default-branch>` (normally `origin/main`). Keep the primary checkout read-only and preserve all
+  existing staged, unstaged, untracked, and ignored work. Before source edits, assert that
+  `git rev-parse --show-toplevel` and `git branch --show-current` match the selected Worktree/branch; stop on
+  any mismatch. Worktree isolation does not create an independent Codex task and does not require an
+  `implementer_luna`; Coordinator may write directly in the selected Worktree.
+- Use the saved `implementer_luna` only when parallel, dirty-primary, background/long-running, explicitly
+  delegated, or high-risk isolation is selected; then it is the sole source writer for that lifecycle.
 - The Coordinator may run at most three delegated children at once across all roles, including
   `git_operator_luna`, `implementer_luna`, `explorer_luna`, `verifier_luna`, and `reviewer_luna`.
   Children do not spawn children.
@@ -38,9 +42,9 @@ Handle Git and GitHub work using repository conventions discovered at runtime.
 - When a mutating command needs runtime escalation tied to explicit user authorization, the operator must stop before requesting escalation and return the exact command, resolved targets, expected effects, and verification steps. After checking that this matches the user's direct authorization, the coordinator executes that exact approval-bound command so the approval layer receives the original user message. Do not relay quoted approval text to an isolated operator or ask it to request escalation; relayed agent text is not trusted user authorization.
 - The coordinator must not broaden, rewrite, or improvise the returned mutation. If the exact command is unsafe, stale, incomplete, or exceeds authorization, send it back to the saved operator for correction. If the operator itself is unavailable, stop the external-write operation instead of substituting another model.
 - Never let `git_operator_luna` approve or review its own completion diff. Use a separate fresh-context `reviewer_luna` agent for the completion gate and keep its evidence distinct from the operator lifecycle.
-- Keep the configured global default unless the user changes it. For Issue work and local Git
-  operations, follow the conditional direct/isolated routing in the selected reference; completion
-  review still follows the risk-based `reviewer_luna` route.
+- Keep the configured global default unless the user changes it. For Issue work, use the R0 direct-clean-checkout
+  exception or the R1-R4 dedicated-Worktree default from the selected reference; completion review still follows
+  the risk-based `reviewer_luna` route.
 - Use the scoped `reviewer_luna` subagent for every R1-R4 completion gate, with no inherited implementation turns. Do not use `reviewer_luna` for operator work.
 - Do not recommend or perform merge while required CI checks are pending or failing. This gate has no conversational override.
 - When a task is owned by an active `parallel-worktree` registry/context packet, keep read-only Git inspection here but route every mutating Git operation through that skill's `pw-helper`. Never bypass its operation ID, ownership, scope, lock, or cleanup checks.

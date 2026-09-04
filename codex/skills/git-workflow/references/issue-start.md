@@ -1,17 +1,19 @@
 # Start Issue Work
 
-Use this reference only when starting or triaging work for a specific Issue. Keep the normal path
-small: the Coordinator/main owns local inspection, planning, implementation, and targeted tests.
+Use this reference only when starting or triaging work for a specific Issue. R0 stays small and direct;
+R1-R4 implementation starts in an Issue-dedicated Worktree from the latest remote default branch.
 
 ## Defaults
 
 - Keep the configured global model default unless the user explicitly changes it.
 - Read the repository status, current branch, remotes, Issue, relevant specifications, and tests
   directly in the Coordinator/main context. Do not spawn `git_operator_luna` merely for reads.
-- A clean, single, foreground task stays in the current checkout and does not require a Worktree or
-  `implementer_luna` child.
-- Use a Worktree only for parallel work, a dirty primary checkout, background/long-running work, or
-  explicit isolation. Read [parallel-worktree](../../parallel-worktree/SKILL.md) when that condition applies.
+- R0 copy/comment/obvious-formatting work may stay in the current clean checkout without a Worktree.
+- R1-R4 work uses a dedicated Worktree by default. Run `git fetch origin` once, resolve the remote default
+  branch, freeze `origin/<default-branch>` as the base, and keep the primary checkout read-only. Read
+  [parallel-worktree](../../parallel-worktree/SKILL.md) for the provisioning lifecycle.
+- Worktree selection does not create an independent Codex task or require `implementer_luna`; the Coordinator
+  may implement directly in the selected Worktree. Reuse the same Worktree when resuming the Issue lifecycle.
 
 ## Conditional roles
 
@@ -29,8 +31,9 @@ small: the Coordinator/main owns local inspection, planning, implementation, and
 1. Run `git status --short`, identify staged/unstaged/untracked work, and preserve unrelated changes.
 2. Resolve the Issue and repository target, then inspect the relevant code, policy, and tests before
    asking questions. Use at most three related Issues only when the relationship is strong and useful.
-3. Select the current-checkout default or the conditional Worktree/role route above. Do not switch a
-   dirty checkout or overwrite another lifecycle's files.
+3. For R1-R4, provision or resume the Issue-dedicated Worktree from the frozen remote base and verify its
+   realpath/branch before any source edit. For R0, use only a clean checkout. Never switch a dirty checkout
+   or overwrite another lifecycle's files.
 4. Use Plan/TDD for workflow changes: state scope, success criteria, acceptance scenarios, risks, and
    targeted tests. Use one-question dig only for an unresolved material decision.
 5. Implement the smallest change in the selected writer context and run targeted tests. For UI, follow
@@ -50,5 +53,5 @@ git status --short
 git branch --show-current
 gh issue view <number> --repo <owner/repo>
 git fetch origin
-git checkout -b <branch-name> origin/<default-branch>
+git worktree add <worktree-path> -b <branch-name> origin/<default-branch>
 ```

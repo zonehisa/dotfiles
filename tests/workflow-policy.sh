@@ -3,12 +3,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 AGENTS="$ROOT/codex/AGENTS.md"
+README="$ROOT/README.md"
 POLICY="$ROOT/policies/development-workflow.md"
 SKILL="$ROOT/codex/skills/git-workflow/SKILL.md"
 DELIVERY="$ROOT/codex/skills/git-workflow/references/delivery.md"
 ISSUE_START="$ROOT/codex/skills/git-workflow/references/issue-start.md"
 PARALLEL="$ROOT/codex/skills/parallel-worktree/SKILL.md"
 LIFECYCLE="$ROOT/codex/skills/parallel-worktree/references/lifecycle.md"
+PARALLEL_OPENAI_YAML="$ROOT/codex/skills/parallel-worktree/agents/openai.yaml"
 FINGERPRINT="$ROOT/codex/skills/git-workflow/scripts/review_fingerprint.py"
 UI_EVIDENCE="$ROOT/codex/skills/git-workflow/scripts/ui_evidence.py"
 CODE_REVIEW="$ROOT/codex/skills/git-workflow/references/code-review.md"
@@ -28,24 +30,37 @@ absent() {
   fi
 }
 
-for path in "$AGENTS" "$POLICY" "$SKILL" "$DELIVERY" "$ISSUE_START" "$PARALLEL" "$LIFECYCLE" "$FINGERPRINT" "$UI_EVIDENCE" "$CODE_REVIEW" "$SNAPSHOT" "$SNAPSHOT_TEST"; do
+for path in "$AGENTS" "$README" "$POLICY" "$SKILL" "$DELIVERY" "$ISSUE_START" "$PARALLEL" "$LIFECYCLE" "$PARALLEL_OPENAI_YAML" "$FINGERPRINT" "$UI_EVIDENCE" "$CODE_REVIEW" "$SNAPSHOT" "$SNAPSHOT_TEST"; do
   [[ -f "$path" ]] || fail "missing required file: $path"
 done
 
 agent_bytes=$(wc -c < "$AGENTS" | tr -d ' ')
 (( agent_bytes >= 3000 && agent_bytes <= 6000 )) || fail "AGENTS.md must stay between 3KB and 6KB (got $agent_bytes)"
 
-# Normal work is direct; delegation and Worktrees are opt-in conditions.
-contains 'Coordinator/main が read-only の調査、Plan/TDD、' "$AGENTS"
-contains 'source edit、targeted test を直接行う' "$AGENTS"
-contains '読み取りのために `git_operator_luna` や `implementer_luna` を必須化しません' "$POLICY"
+# R0 is the only direct-checkout exception; R1-R4 Issue work is Worktree-default.
+contains 'R0（文言、コメント、明白な整形）' "$AGENTS"
+contains '`origin/<default-branch>`' "$AGENTS"
+contains 'R1〜R4 の Worktree は Issue lifecycle の既定' "$AGENTS"
+contains 'R1〜R4 の新規 Issue' "$POLICY"
+contains '専用' "$README"
+contains 'Worktree' "$README"
+contains 'R1-R4 work for a new Issue defaults to a dedicated Worktree' "$SKILL"
+contains 'R1-R4 work uses a dedicated Worktree by default' "$ISSUE_START"
+contains 'For every new R1-R4 Issue' "$DELIVERY"
+contains 'R1-R4 Issue work uses' "$PARALLEL"
+contains 'Use this lifecycle for every new R1-R4 Issue' "$LIFECYCLE"
+contains 'allow_implicit_invocation: true' "$PARALLEL_OPENAI_YAML"
+contains 'Worktree isolation は独立した Codex task' "$POLICY"
 contains 'Do not spawn `git_operator_luna` merely for reads.' "$ISSUE_START"
 contains 'Do not spawn `git_operator_luna` merely for reads.' "$SKILL"
-contains 'implementer_luna` only for parallel, dirty-checkout, background/long-running' "$DELIVERY"
-contains 'Worktree only for parallel, dirty-primary, background/long-running, or explicit isolation' "$SKILL"
-contains 'Clean, single, foreground' "$PARALLEL"
-contains 'clean single-foreground' "$LIFECYCLE"
-contains 'task remains in the current checkout' "$LIFECYCLE"
+contains 'Use `implementer_luna` only for parallel, dirty-checkout' "$DELIVERY"
+contains 'Worktree isolation does not create an independent Codex task' "$SKILL"
+contains 'Worktree isolation は独立した Codex task' "$POLICY"
+absent 'Worktree only for parallel' "$SKILL"
+absent 'conditional Worktree decision' "$LIFECYCLE"
+absent 'conditional rather than mandatory' "$DELIVERY"
+absent 'clean・単独・foreground では現在の checkout を保ちます' "$POLICY"
+absent '通常の clean・単独・foreground は Coordinator/main が直接' "$README"
 absent 'Delegate Git/GitHub discovery, target resolution, command preparation, and non-approval-bound execution' "$SKILL"
 absent 'git-workflow`のcompletion reviewを除くGit/GitHubの調査' "$AGENTS"
 absent 'Implementation/TDD: `implementer_luna`, GPT-5.6 Luna `max`, workspace-write.' "$PARALLEL"
@@ -149,6 +164,7 @@ PY
 # The fingerprint and UI helpers have focused regression suites; run them here so this policy
 # sensor exercises the implementation rather than only checking prose.
 (cd "$ROOT" && python3 -m unittest \
+  codex/skills/git-workflow/tests/test_worktree_default_policy.py \
   codex/skills/git-workflow/tests/test_review_fingerprint.py \
   codex/skills/git-workflow/tests/test_ui_evidence.py \
   codex/skills/git-workflow/tests/test_external_pr_snapshot.py)

@@ -6,12 +6,16 @@
 
 ## 通常経路
 
-- clean な checkout で単独・foreground の作業は、Coordinator/main が read-only の調査、Plan/TDD、
-  source edit、targeted test を直接行う。読み取りのために child agent を起動しない。
+- R0（文言、コメント、明白な整形）は、clean な checkout で Coordinator/main が直接行える。
+- R1〜R4 の新規 Issue（コード、設定、挙動、UIを含む）は、開始時に一度 `git fetch origin` を行い、
+  `origin/<default-branch>`（通常は `origin/main`）から専用 Worktree を作成する。primary checkout は
+  read-only の基準点として保全し、source edit と targeted test は専用 Worktree 内で行う。
+  Worktree の選択は独立した Codex task や `implementer_luna` の必須化を意味せず、Coordinator が
+  Worktree 内で直接実装してよい。
 - `implementer_luna` は通常経路の必須役ではない。parallel、dirty checkout、background、または
   Coordinator が明示的に隔離を選んだ lifecycle だけで使い、選んだ lifecycle では唯一の writer とする。
-- Worktree は parallel 作業、primary が dirty なままの作業、background/長時間作業、または明示要求の時だけ使う。
-  それ以外は現在の checkout を保ち、無関係な staged/unstaged/untracked work を変更しない。
+- R1〜R4 の Worktree は Issue lifecycle の既定であり、同じ lifecycle の再開では同じ Worktree を再利用する。
+  primary の staged/unstaged/untracked work は変更せず、R0以外でprimaryへ書き戻さない。
 - `git_operator_luna` は read-only 調査の必須役ではない。Issue/PR 作成、push、コメントなど
   Git/GitHub の外部 write だけを、正確な対象と明示された認可付きで operator に渡す。local の status、diff、
   branch、通常の検証は Coordinator/main が行える。operator は自分の completion diff を review しない。

@@ -61,10 +61,12 @@ Codex の Skills と設定ファイルは次のパスへシンボリックリン
 
 ### Codex workflow
 
-通常の clean・単独・foreground は Coordinator/main が直接、read-only 調査・Plan/TDD・実装・targeted test
-まで行います。`git_operator_luna` は read-only の必須役ではなく、Issue/PR 作成、push、コメントなど Git/GitHub
-外部 write の exact target と認可-bound 操作だけに使います。`implementer_luna` と Worktree は parallel、dirty
-checkout、background/長時間、または明示された隔離時だけ選びます。
+R0（文言、コメント、明白な整形）は clean checkout で Coordinator/main が直接行います。R1〜R4 の新規 Issue は
+開始時に一度 `git fetch origin` を行い、最新の `origin/<default-branch>`（通常は `origin/main`）から専用
+Worktreeを作成して、primary checkoutをread-onlyで保全します。Worktree isolationは独立したCodex taskや
+`implementer_luna`の必須化を意味せず、CoordinatorがWorktree内で直接実装できます。`git_operator_luna`は
+read-onlyの必須役ではなく、Issue/PR作成、push、コメントなどGit/GitHub外部writeのexact targetと認可-bound
+操作だけに使います。実装前にWorktreeのrealpathとbranchを確認し、不一致なら停止します。
 
 R1〜R4 の変更は fresh-context Luna/max reviewer の completion gate を通します。user-visible UI は実装中に IAB を
 繰り返さず、技術検証と review 後の最終候補で Coordinator/main が built-in IAB (`agent.browsers.get("iab")`) を

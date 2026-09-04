@@ -1,8 +1,9 @@
 # Lifecycle
 
-Use this lifecycle only when work is parallel, the primary checkout is dirty, the task must run in
-the background/for a long time, or the user explicitly requests isolation. A clean single-foreground
-task remains in the current checkout and does not need this skill.
+Use this lifecycle for every new R1-R4 Issue so implementation starts in a dedicated Worktree from the
+latest fetched `origin/<default-branch>` (normally `origin/main`). R0 copy/comment/obvious-formatting work
+may remain in a clean checkout.
+Resume the same Worktree for an existing Issue lifecycle; do not provision a second one.
 
 ## Responsibility Boundary
 
@@ -26,8 +27,9 @@ Exceptional states are `blocked`, `drifted`, `orphaned`, `failed`, and `cleanup_
 
 ## Start
 
-The conditional Worktree decision is made before provisioning. Do not create a Worktree merely to
-delegate ordinary implementation or read-only inspection.
+The R1-R4 Worktree-default decision is made before provisioning. R0 copy/comment/formatting work may
+stay in a clean checkout. Do not create a Worktree merely to delegate ordinary read-only inspection,
+and do not create a second Worktree when resuming the same Issue lifecycle.
 
 ### Read-only preparation
 
@@ -51,7 +53,9 @@ An expired lease never authorizes automatic recreation or deletion. `resume` rec
 
 ### External provisioning and adoption
 
-1. Create the worktree/task without holding file locks. `codex_managed` reserves only a logical slot; `skill_managed` reserves an exact allowed path.
+1. Create the Worktree without holding file locks. Bind a task only when the selected adapter requires an
+   owner task; Worktree isolation itself does not create an independent Codex task. `codex_managed` reserves
+   only a logical slot; `skill_managed` reserves an exact allowed path.
 2. Reacquire Issue then repository lock.
 3. Verify actual path, owner task ID, base HEAD, detached state, clean state, ignored-file manifest, ownership, and permission profile.
 4. Reject symlinks, the primary root, repository root, paths outside the allowed worktree root, or paths missing from `git worktree list --porcelain`.
@@ -89,7 +93,7 @@ Legacy v1 registries remain readable for status, resume, and cleanup recovery. S
 
 | Risk | Plan | Implementation/TDD | Completion review |
 |---|---|---|---|
-| R0 | Sol medium | Coordinator/main; optional isolated implementer | Skip |
-| R1 | Sol medium | Coordinator/main; optional isolated `implementer_luna` (Luna `max`) | Fresh-context `reviewer_luna`: Luna `max`, read-only |
-| R2 | Sol high | Coordinator/main; optional isolated `implementer_luna` (Luna `max`) | Fresh-context `reviewer_luna`: Luna `max`, read-only |
-| R3-R4 | Sol xhigh | Coordinator/main or isolated `implementer_luna` (Luna `max`) | Fresh-context `reviewer_luna`: Luna `max`, read-only |
+| R0 | Sol medium | Coordinator/main in a clean checkout | Skip |
+| R1 | Sol medium | Dedicated Worktree; Coordinator/main or optional isolated `implementer_luna` (Luna `max`) | Fresh-context `reviewer_luna`: Luna `max`, read-only |
+| R2 | Sol high | Dedicated Worktree; Coordinator/main or optional isolated `implementer_luna` (Luna `max`) | Fresh-context `reviewer_luna`: Luna `max`, read-only |
+| R3-R4 | Sol xhigh | Dedicated Worktree; Coordinator/main or `implementer_luna` (Luna `max`) | Fresh-context `reviewer_luna`: Luna `max`, read-only |

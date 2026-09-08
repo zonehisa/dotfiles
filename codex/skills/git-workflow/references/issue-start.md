@@ -37,10 +37,12 @@ R1-R4 implementation starts in an Issue-dedicated Worktree from the latest remot
 4. Use Plan/TDD for workflow changes: state scope, success criteria, acceptance scenarios, risks, and
    targeted tests. Use one-question dig only for an unresolved material decision.
 5. Implement the smallest change in the selected writer context and run targeted tests. For UI, follow
-   `delivery.md`: Coordinator-owned IAB evidence, verifier before human acceptance, review, then one
-   final IAB plus human appearance/primary-behavior acceptance.
-6. Save required Issue context only when repository conventions require it. Do not commit, push, merge,
-   or create a PR from this reference; those are separate explicitly authorized delivery operations.
+   `delivery.md` in this order: tests and technical verification -> completion review -> Coordinator
+   final IAB -> verifier read-only packet check -> human appearance/primary-behavior acceptance.
+6. Save required Issue context only when repository conventions require it. A fix/change request alone
+   does not authorize staging or publication; continue read-only investigation, diff organization,
+   non-staging review preparation, and tests until the staging gate. Do not commit, push, merge, or
+   create a PR from this reference; those are separate explicitly authorized delivery operations.
 7. Report the Issue, branch or checkout, changed paths, tests, and unresolved decisions.
 
 If the current mode prohibits a local mutation, complete investigation and planning first, then resume

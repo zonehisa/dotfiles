@@ -10,10 +10,10 @@ Handle Git and GitHub work using repository conventions discovered at runtime.
 ## Core Rules
 
 - Treat existing changes as user work; never revert unrelated changes.
-- Never commit, push, create a PR, post a review, merge, or clean up resources without explicit user authorization.
-- Authorization may be scoped to a delivery bundle. `PRまで` or an equivalent explicit request authorizes commit, push, and PR creation for the same reviewed fingerprint and verified target without another pause between those steps. It never authorizes merge.
+- A request to fix or change something does not by itself authorize staging, committing, pushing, creating a PR, posting a review, merging, or cleanup. Continue read-only investigation, diff organization, non-staging review preparation, and tests while that authorization is missing.
+- An explicit request such as `対象変更をPRまで` authorizes, for that target scope only, review preparation, staging the intended scope, commit, push, and PR creation as one delivery bundle. It still does not authorize merge, and it never broadens the reviewed target.
 - `cleanup` after merge/deploy authorizes one safety-checked batch for dedicated environments, merged worktrees, and branches. Preserve dirty worktrees and commits that are neither reachable nor patch-equivalent to the merged target.
-- Keep one fresh-context `reviewer_luna` agent per repository/Issue-or-branch/base/reviewer-role lifecycle for every R1-R4 review. Skip a round only when its patch, acceptance criteria, risk, and target files are unchanged; otherwise reuse the saved agent for the next numbered round.
+- Keep one fresh-context `reviewer_luna` agent per repository/Issue-or-branch/base/reviewer-role lifecycle for every R1-R4 review. When only the patch/fix delta changes within the same review context, reuse that reviewer for the next numbered round. A change to acceptance criteria, risk, target files, or the immutable threat-model declaration starts a new lifecycle. See `references/delivery.md` for round limits, keys, and fingerprint details.
 - Read repository `AGENTS.md`, `README.md`, contributing docs, and relevant local skills before acting.
 - Detect the repository, default branch, conventions, labels, test commands, and current state instead of hardcoding them.
 - Stop and ask one narrow question only when the next action could damage user work, publish externally, or target the wrong Issue/PR.
@@ -61,9 +61,12 @@ Read only the reference required for the current operation. Do not preload the o
 For user-visible UI delivery, also apply the PR Evidence Lifecycle in
 [references/delivery.md](references/delivery.md). Keep evidence review separate from completion
 diff review and do not upload through an API or `gh`. Do not repeat IAB checks during implementation;
-the Coordinator's default browser is the built-in IAB selected explicitly with
-`agent.browsers.get("iab")` once on the review-cleared final candidate, and never auto-fallback to
-another browser.
+the Coordinator's default browser is the built-in IAB selected explicitly by browser ID `iab` once on
+the review-cleared final candidate, and never auto-fallback to another browser. Follow the current
+browser-control documentation: when legacy documentation exposes `agent.browsers.get`, use that
+documented API; current CUA examples and the exact selection forms are maintained in
+`references/delivery.md`. Do not execute an API that the published documentation does not provide.
+The existing evidence packet keeps `selector` and `browser_family` set to `iab`.
 
 `prr` reviewing another PR uses the read-only external remote-PR lane in
 [references/code-review.md](references/code-review.md) and
@@ -74,6 +77,10 @@ materialization, or `review_fingerprint.py`. The local completion lane keeps the
 two-operator-stage preparation/execution/verification boundary documented in that reference.
 
 When a request spans operations, read the references in execution order, loading each only when that operation begins. For example, `is` followed later by `cm` starts with `issue-start.md` and defers `delivery.md` until commit is requested.
+
+For an independent forward evaluation of these workflow decisions, use the small structured cases in
+[references/action-eval.json](references/action-eval.json). The cases are inputs for an independent
+agent; matching prose or grep output is not an evaluation result.
 
 ## Minimal Context Detection
 

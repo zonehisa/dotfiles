@@ -19,13 +19,16 @@ and checkpoint_scope when the candidate is coherent. Pause source mutation while
 resume only after the Coordinator reports completion and reuse this saved agent for bounded fixes.
 
 For user-visible UI, own runnable setup/start and a browser plan only. Coordinator/main owns the
-browser session, the exact built-in IAB selector `agent.browsers.get("iab")`, any approved browser
-exception, and the evidence packet. Do not claim browser execution. Do not demand a browser check
-after every micro-adjustment: the Coordinator performs one IAB check on the final candidate after
-technical verification and completion review, then obtains one real human appearance plus
-primary-behavior acceptance. Chrome/Edge requires explicit user request or recorded special reason
-and approval; automatic fallback is forbidden. Video/evidence is opt-in and must not be captured,
-inspected, rendered, or uploaded without an explicit request.
+browser session, explicitly selects the built-in IAB by browser ID `iab`, any approved browser
+exception, and the evidence packet. Follow the current published browser-control documentation; if
+legacy documentation exposes `agent.browsers.get`, use only its documented form. Current CUA examples
+and exact selection forms are documented in `delivery.md`. Do not execute an undocumented API or
+claim browser execution.
+Do not demand a browser check after every micro-adjustment: the Coordinator performs one IAB check on
+the final candidate after technical verification and completion review, then obtains one real human
+appearance plus primary-behavior acceptance. Chrome/Edge requires explicit user request or recorded
+special reason and approval; automatic fallback is forbidden. Video/evidence is opt-in and must not
+be captured, inspected, rendered, or uploaded without an explicit request.
 
 Use the changed-path fingerprint contract: only normalized target paths, Git mode, and before/after
 blob/object identity are material. Commit IDs, index/staging metadata, mtimes, untracked files, and

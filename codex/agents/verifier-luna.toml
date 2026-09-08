@@ -33,16 +33,19 @@ This verification before final human acceptance is technical only.
 For user-visible UI only, before technical verification, recompute the canonical `accepted_source_fingerprint` for the exact changed `checkpoint_scope`; it is built from deterministic records of normalized repo-relative paths, file/symlink type, Git mode, and working-tree blob/object identity (symlink target is hashed). HEAD/index/staging/mtime, untracked files, and out-of-scope paths are excluded. Staging/index-only changes leave the fingerprint unchanged; any scoped content, type, mode, symlink, or deletion change invalidates a supplied packet. `ui_evidence.py` validates the scope without mutating Git or the index. Git status/diff remain supplementary before/after evidence, not the UI source fingerprint. Once the final IAB packet is supplied, a missing, mismatched, or source-drifted packet invalidates verifier evidence. The verifier must mark its evidence invalid.
 
 Before the final IAB packet exists, browser evidence is not required for technical verification.
-Once Coordinator/main supplies the final packet, require exact selector=`iab` from
-`agent.browsers.get("iab")` on the default path. For both the default IAB path and an approved
-browser exception, the packet must include the exact selector, checked URL, primary flow/view, and
-applicable existing-policy viewport set. Reject Browser skill read-only, shell/HTTP/test-only, or
-unapproved browser evidence. `getDefault()`, `getForUrl()`, and `agent.browsers.get("extension")`
-do not satisfy this requirement. Verifier-side IAB unavailability alone is non-blocking when the
-packet and human acceptance are valid. Only a valid final packet permits advancement to human
-acceptance; verifier may not acquire or rerun the Coordinator IAB session.
+Once Coordinator/main supplies the final packet, require exact selector=`iab` and
+browser_family=`iab` on the default path. Coordinator/main must have explicitly selected the built-in
+IAB by browser ID `iab` using the current published browser-control documentation. If legacy
+documentation exposes `agent.browsers.get`, use only its documented form; current CUA examples are
+documented in `delivery.md`. Do not execute an undocumented or nonexistent API. For both
+the default IAB path and an approved browser exception, the packet must include the exact selector,
+checked URL, primary flow/view, and applicable existing-policy viewport set. Reject Browser skill
+read-only, shell/HTTP/test-only, or unapproved browser evidence. Verifier-side IAB unavailability
+alone is non-blocking when the packet and human acceptance are valid. Only a valid final packet
+permits advancement to human acceptance; verifier may not acquire or rerun the Coordinator IAB
+session.
 
-An approved browser exception may use exact selector=`chrome` or `edge` only when the user explicitly names that family, or when a Chrome/Edge-specific login, extension, or existing-tab requirement has a recorded reason and explicit user approval. For that path, verify the matching `agent.browsers.get("chrome")` or `agent.browsers.get("edge")` selection.
+An approved browser exception may use exact selector=`chrome` or `edge` only when the user explicitly names that family, or when a Chrome/Edge-specific login, extension, or existing-tab requirement has a recorded reason and explicit user approval. For that path, verify the matching browser ID (`chrome` or `edge`) selection through the current published documentation.
 An approved Chrome/Edge exception additionally requires a specific reason, explicit user approval evidence, and a matching browser family.
 For an approved browser exception, require the exception reason, approval evidence, and a matching browser family; reject missing approval, missing reason, family mismatch, and automatic fallback. The explicit browser request itself is the approval evidence for the named-family branch; special-requirement exceptions need recorded reason and explicit approval. An IAB-to-Chrome/Edge automatic fallback is rejected.
 

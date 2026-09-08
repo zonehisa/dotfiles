@@ -41,13 +41,15 @@ threat-model、再レビューは [`delivery.md`](../codex/skills/git-workflow/r
 ## User-visible UI
 
 IAB と human acceptance の安全境界は緩和しません。実装中はローカルの技術確認と微修正だけを行い、IAB を
-繰り返しません。verifier の read-only 検証と completion review を通過した最終候補で、Coordinator/main が
-built-in IAB を exact selector `agent.browsers.get("iab")` で一度だけ明示選択します。Chrome/Edge はユーザーの
-明示要求、または記録済みの特別要件と認可がある時だけで、automatic fallback、shell/HTTP/test-only、Browser
-skill read-only を証拠にしません。同じ最終候補で visual/interactive 合否と human appearance＋primary-behavior
-acceptance を一度だけ行います。人の判断を AI、verifier、reviewer が代替しません。non-UI は browser packet、
-human UI acceptance、UI 用の `accepted_source_fingerprint` を要求しません（ただし R1〜R4 の
-staged completion fingerprint は `delivery.md` に従います）。
+繰り返しません。tests/technical verification → completion review → Coordinator が browser ID `iab` の
+built-in IAB を明示選択 → verifier の read-only 検証 → human acceptance の順で、review-cleared な最終候補を
+一度だけ確認します。現行の公開 browser-control documentation に従い、Chrome/Edge はユーザーの明示要求、
+または記録済みの特別要件と認可がある時だけで、automatic fallback、shell/HTTP/test-only、Browser skill
+read-only を証拠にしません。同じ最終候補で visual/interactive 合否と human appearance＋primary-behavior
+acceptance を一度だけ行います。人の判断を AI、verifier、reviewer が代替しません。evidence packet の既存
+`selector`/`browser_family` は default IAB では `iab` を維持します。non-UI は browser packet、human UI
+acceptance、UI 用の `accepted_source_fingerprint` を要求しません（ただし R1〜R4 の staged completion
+fingerprint は `delivery.md` に従います）。
 
 `accepted_source_fingerprint` は exact checkpoint scope の変更対象 path のみを、正規化した path、file/symlink
 type、Git mode、working-tree bytes の blob（symlink は target）から deterministic canonical SHA-256 として
@@ -57,9 +59,11 @@ flow/view、viewport、artifact/hash を同じ候補に固定します。実装�
 
 ## 認可・証跡・動画
 
-stage、commit、push、PR、Issue/comment、merge、cleanup は明示された対象・scope・認可なしに実行しません。
-`PRまで` は同一 reviewed fingerprint/target の commit・push・PR だけを束ね、merge は含みません。required CI
-が未成功なら merge しません。stash、reset、clean、秘密情報のコピー、無関係な整形を行いません。
+修正依頼単体は publish 認可ではありません。stage、commit、push、PR、Issue/comment、merge、cleanup は明示された
+対象・scope・認可なしに実行しません。認可不足でも read-only 調査、差分整理、非stagingレビュー準備、テストを
+続行し、stage gate で必要な認可を一度だけ確認します。明示の「対象変更をPRまで」は、その scope のレビュー準備、
+stage、commit、push、PRまでを束ね、merge や無関係な変更は含みません。required CI が未成功なら merge しません。
+stash、reset、clean、秘密情報のコピー、無関係な整形を行いません。
 
 video/evidence はユーザーが明示的に要求した時だけ作成・検査・upload し、未要求時は PR 本文に
 `Not requested (video evidence is opt-in)` を使います。動画の privacy/artifact gate と browser/UI upload は

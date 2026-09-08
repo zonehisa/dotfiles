@@ -41,10 +41,10 @@ threat-model、再レビュー、報告形式は `git-workflow/references/delive
 
 ## UI・証跡
 
-- user-visible UI は実装中に IAB を繰り返さず、review-cleared な最終候補で Coordinator/main が built-in
-  IAB を一度だけ明示選択する（exact selector: `agent.browsers.get("iab")`）。Chrome/Edge は明示要求または
-  記録済みの特別要件と認可がある場合だけ。IAB からの automatic fallback、shell/HTTP/test-only、Browser
-  skill read-only は証拠にしない。
+- user-visible UI は実装中に IAB を繰り返さず、review-cleared な最終候補で Coordinator/main が browser ID
+  `iab` の built-in IAB を一度だけ明示選択する。公開 browser-control documentation の現行 API に従い、
+  Chrome/Edge は明示要求または記録済みの特別要件と認可がある場合だけ。IAB からの automatic fallback、
+  shell/HTTP/test-only、Browser skill read-only は証拠にしない。
 - UI の visual/interactive 合否と human appearance＋primary-behavior acceptance は同じ最終候補で一度だけ行う。
   人の acceptance を AI、verifier、reviewer が代替しない。Verifier は最終 packet、source integrity、targeted
   test、log、objective non-browser check を read-only に検証し、IAB を取得・再実行しない。
@@ -57,9 +57,11 @@ threat-model、再レビュー、報告形式は `git-workflow/references/delive
 
 ## 認可と保護
 
-- stage、commit、push、PR、Issue/comment、merge、cleanup など外部/不可逆操作は、短縮語だけから権限を
-  推測せず、明示された対象・scope・認可の範囲だけで行う。`PRまで` も同一の reviewed fingerprint と
-  target に限り、merge は含まない。required CI が未成功なら merge しない。
+- 修正依頼単体は publish 認可ではない。stage、commit、push、PR、Issue/comment、merge、cleanup などの
+  外部/不可逆操作は、明示された対象・scope・認可の範囲だけで行う。認可不足でも read-only 調査、差分整理、
+  非stagingレビュー準備、テストを続け、stage gate で必要な認可を一度だけ聞く。明示の「対象変更をPRまで」は
+  その scope のレビュー準備、stage、commit、push、PRまでを含み、merge は含まない。required CI が未成功なら
+  merge しない。
 - stash、reset、clean、無関係な format、秘密情報のコピーをしない。dirty worktree、untracked、専用 runtime、
   未証明 commit は保存し、削除が依頼された時も対象を先に特定する。
 - 実装後は changed paths、仮説、実行した検証、残る未検証範囲を報告する。詳細な role handoff、checkpoint、

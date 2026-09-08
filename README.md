@@ -69,10 +69,14 @@ read-onlyの必須役ではなく、Issue/PR作成、push、コメントなどGi
 操作だけに使います。実装前にWorktreeのrealpathとbranchを確認し、不一致なら停止します。
 
 R1〜R4 の変更は fresh-context Luna/max reviewer の completion gate を通します。user-visible UI は実装中に IAB を
-繰り返さず、技術検証と review 後の最終候補で Coordinator/main が built-in IAB (`agent.browsers.get("iab")`) を
-一度だけ選び、同じ候補で human appearance＋primary behavior acceptance を行います。video/evidence は明示 opt-in の時だけです。
+繰り返さず、tests/技術検証 → review → Coordinator/main が browser ID `iab` の built-in IAB を明示選択 → verifier
+→ human appearance＋primary behavior acceptance の順で、review後の最終候補を一度だけ確認します。現行の公開
+browser-control documentation に従い、Chrome/Edge は明示要求または特別要件と認可がある場合だけです。
+video/evidence は明示 opt-in の時だけです。
 
-詳細な risk、Worktree、UI packet、changed-path blob/mode fingerprint、認可、review、動画手順は
+修正依頼だけでは publish 認可になりません。認可不足でも read-only 調査、差分整理、非stagingレビュー準備、テストを
+続け、stage gate で一度だけ確認します。明示の「対象変更をPRまで」は、その scope のレビュー準備、stage、commit、
+push、PRまでを含み、merge は含みません。詳細な risk、Worktree、UI packet、changed-path blob/mode fingerprint、認可、review、動画手順は
 [`policies/development-workflow.md`](./policies/development-workflow.md) と
 [`codex/skills/git-workflow/SKILL.md`](./codex/skills/git-workflow/SKILL.md) から必要な reference を読みます。
 

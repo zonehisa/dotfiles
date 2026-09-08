@@ -16,6 +16,9 @@ UI_EVIDENCE="$ROOT/codex/skills/git-workflow/scripts/ui_evidence.py"
 CODE_REVIEW="$ROOT/codex/skills/git-workflow/references/code-review.md"
 SNAPSHOT="$ROOT/codex/skills/git-workflow/scripts/external_pr_snapshot.py"
 SNAPSHOT_TEST="$ROOT/codex/skills/git-workflow/tests/test_external_pr_snapshot.py"
+IMPLEMENTER="$ROOT/codex/agents/implementer-luna.toml"
+VERIFIER="$ROOT/codex/agents/verifier-luna.toml"
+ACTION_EVAL="$ROOT/codex/skills/git-workflow/references/action-eval.json"
 
 fail() { printf 'workflow-policy: %s\n' "$1" >&2; exit 1; }
 contains() { grep -Fq -- "$1" "$2" || fail "missing '$1' in $2"; }
@@ -30,7 +33,7 @@ absent() {
   fi
 }
 
-for path in "$AGENTS" "$README" "$POLICY" "$SKILL" "$DELIVERY" "$ISSUE_START" "$PARALLEL" "$LIFECYCLE" "$PARALLEL_OPENAI_YAML" "$FINGERPRINT" "$UI_EVIDENCE" "$CODE_REVIEW" "$SNAPSHOT" "$SNAPSHOT_TEST"; do
+for path in "$AGENTS" "$README" "$POLICY" "$SKILL" "$DELIVERY" "$ISSUE_START" "$PARALLEL" "$LIFECYCLE" "$PARALLEL_OPENAI_YAML" "$FINGERPRINT" "$UI_EVIDENCE" "$CODE_REVIEW" "$SNAPSHOT" "$SNAPSHOT_TEST" "$IMPLEMENTER" "$VERIFIER" "$ACTION_EVAL"; do
   [[ -f "$path" ]] || fail "missing required file: $path"
 done
 
@@ -85,11 +88,22 @@ contains 'Round 3' "$DELIVERY"
 contains 'P0-P2 findings block' "$DELIVERY"
 
 # UI confirmation is explicit IAB and one final candidate, not a per-edit loop.
-for path in "$AGENTS" "$POLICY" "$DELIVERY" "$SKILL"; do
-  contains 'agent.browsers.get("iab")' "$path"
+for path in "$AGENTS" "$POLICY" "$DELIVERY" "$SKILL" "$VERIFIER"; do
+  contains 'browser ID' "$path"
+  contains 'iab' "$path"
   contains_any 'automatic fallback' "$path" 'auto-fallback'
   contains_any 'once' "$path" '一度だけ'
+  absent 'agent.browsers.get("iab")' "$path"
 done
+contains 'one IAB check' "$IMPLEMENTER"
+contains 'browser ID `iab`' "$IMPLEMENTER"
+contains 'automatic fallback is forbidden' "$IMPLEMENTER"
+contains 'cua.createBrowserTab("iab"' "$DELIVERY"
+contains 'visible: true' "$DELIVERY"
+contains 'cua.getTab(tabId' "$DELIVERY"
+contains 'selector="iab"' "$DELIVERY"
+contains 'tests and technical verification -> completion review -> Coordinator' "$DELIVERY"
+contains 'tests and technical verification -> completion review -> Coordinator' "$ISSUE_START"
 contains 'do not start completion review or an IAB check after every' "$DELIVERY"
 contains 'visual tweak' "$DELIVERY"
 contains 'final IAB' "$DELIVERY"
@@ -107,6 +121,10 @@ contains 'accepted_source_fingerprint' "$DELIVERY"
 contains 'metadata sidecar' "$DELIVERY"
 contains 'one long event wait' "$ROOT/codex/AGENTS.md"
 contains 'explicit authorization' "$DELIVERY"
+contains 'A fix/change request alone is not publish authorization.' "$DELIVERY"
+contains 'At the staging gate, ask once' "$DELIVERY"
+contains '対象変更をPRまで' "$POLICY"
+contains '対象変更をPRまで' "$README"
 contains 'Required CI' "$DELIVERY"
 contains 'two operator stages' "$CODE_REVIEW"
 contains '最大3つ' "$AGENTS"
@@ -136,6 +154,27 @@ for candidate in python3.13 python3.12 python3.11 python3; do
   fi
 done
 [[ -n "$TOML_PYTHON" ]] || fail "Python 3.11+ with tomllib is required for agent TOML validation"
+
+"$TOML_PYTHON" - "$ACTION_EVAL" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+cases = data.get("cases")
+if data.get("schema_version") != 1 or not isinstance(cases, list) or len(cases) != 8:
+    raise SystemExit("action eval schema/count contract failed")
+required = {"id", "request", "context", "expected_actions", "forbidden_actions"}
+ids = []
+for case in cases:
+    if set(case) != required or not case["expected_actions"] or not case["forbidden_actions"]:
+        raise SystemExit(f"action eval case contract failed: {case.get('id')}")
+    ids.append(case["id"])
+if len(ids) != len(set(ids)):
+    raise SystemExit("action eval ids must be unique")
+print(f"action eval fixture contract passed ({len(cases)} cases)")
+PY
 
 "$TOML_PYTHON" - "$ROOT/codex/agents" <<'PY'
 from pathlib import Path

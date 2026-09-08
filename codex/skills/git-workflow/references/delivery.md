@@ -32,12 +32,16 @@ edit or UI check. Mixed scopes use the highest rank.
 | R3 | persistence, queries, state transitions, authorization, public contracts | fresh `reviewer_luna`, Luna `max`, read-only |
 | R4 | security boundaries, credible data-loss/corruption, concurrency/locking, critical incidents | fresh `reviewer_luna`, Luna `max`, read-only |
 
-Round 1 reviews the complete frozen scope. Round 2 sends only prior findings, their fix delta,
+Round 1 reviews the complete frozen scope. If only the patch/fix delta changes while acceptance
+criteria, risk, target files, and the immutable threat-model declaration remain unchanged, reuse the
+same reviewer for the next numbered round. Round 2 sends only prior findings, their fix delta,
 directly affected paths, the new full-scope fingerprint, the same immutable
 `threat_model_supported_use_declaration_hash`, and successful existing evidence. A user-approved
-Round 3 is bounded by the same fields and is terminal. Do not create another full lifecycle after
-two completed lifecycles in unchanged scope; repeated P0-P2 findings require simplification and
-an explicit user decision.
+Round 3 is bounded by the same fields and is terminal. Skip a round when the patch and its review
+context are unchanged. Any change to acceptance criteria, risk, target files, or the immutable
+threat-model declaration starts a new lifecycle rather than a new round. Do not create another full
+lifecycle after two completed lifecycles in unchanged scope; repeated P0-P2 findings require
+simplification and an explicit user decision.
 
 Spawn one fresh reviewer per lifecycle and save its agent ID. Send bounded `Round N` follow-ups to
 that same reviewer. A missing reviewer, incomplete scope, or fingerprint mismatch invalidates the
@@ -85,17 +89,25 @@ acceptance criteria/risk/target files are unchanged, and both records are retain
 
 For UI changes, Coordinator/main is the sole browser executor. During implementation use ordinary
 local checks and micro-adjustments only; do not start completion review or an IAB check after every
-visual tweak. Run the targeted technical verification and completion review on the settled source.
-On review-cleared content, Coordinator selects the built-in IAB with the exact
-`agent.browsers.get("iab")` selector and performs one final visual/interactive check. Chrome/Edge
-requires a user request or a recorded special requirement plus approval; never auto-fallback. Freeze
-one packet containing selector/family, URL, primary flow/view, viewport, result,
+visual tweak. Run targeted tests and technical verification, then completion review, on the settled
+source. On the review-cleared final candidate, Coordinator explicitly selects the built-in browser
+by browser ID `iab` and performs one final visual/interactive check. Follow the current
+browser-control documentation; if legacy documentation exposes `agent.browsers.get`, use its
+documented form. Current CUA examples are
+`cua.createBrowserTab("iab", url, {visible: true})` and
+`cua.getTab(tabId, {browser: "iab"})`; never execute an undocumented or nonexistent API.
+Chrome/Edge requires a user request or a recorded special requirement plus approval; never
+auto-fallback. Freeze one packet containing selector/family, URL, primary flow/view, viewport, result,
 `automatic_fallback=false`, artifact IDs/hashes, checkpoint token/scope, and the changed-path
 `accepted_source_fingerprint`. Verifier validates this final packet/source/artifact integrity
 read-only without acquiring or rerunning IAB, then the real human accepts appearance and
 primary behavior once on that same candidate. Any material source change reopens technical
 verification/review and requires a new final IAB packet. Non-UI changes require no browser packet or
 human UI acceptance.
+
+The UI gate order is: targeted tests and technical verification -> completion review -> Coordinator's
+final IAB -> verifier's read-only packet check -> human appearance and primary-behavior acceptance.
+The existing packet schema keeps `selector="iab"` and `browser_family="iab"` for the default path.
 
 Serialize the material packet as canonical JSON and bind it to `browser_evidence_hash`; a metadata sidecar
 may contain only generated-at/generator-version fields and cannot override material values.
@@ -133,11 +145,15 @@ appearance/behavior acceptance remain mandatory regardless of video.
 
 ## Authorization, commit, PR, and cleanup
 
-Issue/PR creation, stage, commit, push, comments, merge, and cleanup require explicit authorization
-from the user. `PRまで` bundles commit, push, and PR creation only for the unchanged reviewed target;
-it does not authorize merge. Required CI must be successful before merge. Cleanup removes only
-task-owned runtime resources, clean merged Worktrees, and branches proven reachable or
-patch-equivalent; dirty or unproven resources remain protected.
+A fix/change request alone is not publish authorization. Issue/PR creation, stage, commit, push,
+comments, merge, and cleanup require explicit authorization from the user. Until staging is
+authorized, continue read-only investigation, diff organization, non-staging review preparation,
+and tests. At the staging gate, ask once for the missing authorization instead of silently widening
+the request. An explicit request such as `対象変更をPRまで` authorizes, for that target scope only,
+review preparation, staging, commit, push, and PR creation in that order as one delivery bundle;
+it does not authorize merge or any unrelated path. Required CI must be successful before merge.
+Cleanup removes only task-owned runtime resources, clean merged Worktrees, and branches proven
+reachable or patch-equivalent; dirty or unproven resources remain protected.
 
 Report risk/reason, route, agent ID/model/effort, fingerprint, rounds, finding dispositions,
 tests/sensors, verification commands, and unverified scope.

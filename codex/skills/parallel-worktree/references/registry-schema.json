@@ -68,6 +68,27 @@
     "retention_state": {"enum": ["verified", "unverified"]},
     "archive_delete_contract": {"enum": ["verified", "unverified", "failed", "unsupported"]},
     "pr": {"type": ["object", "null"]},
+    "preflight": {
+      "type": ["object", "null"],
+      "description": "Optional Issue preflight packet metadata. Omitted on legacy records; active writes require a separately stored, validated packet.",
+      "properties": {
+        "evidence_file": {"type": "string", "minLength": 1},
+        "evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "decision": {"enum": ["satisfied", "needs_work", "unknown"]},
+        "issue_relevant_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "target_ref": {"type": "string", "pattern": "^refs/remotes/origin/.+"},
+        "target_sha": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+        "creation_base_ref": {"type": "string", "minLength": 1},
+        "creation_base_sha": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+        "recorded_at": {"type": "string", "format": "date-time"}
+      },
+      "required": ["evidence_file", "evidence_sha256", "decision", "issue_relevant_sha256", "target_ref", "target_sha", "creation_base_ref", "creation_base_sha", "recorded_at"],
+      "additionalProperties": false
+    },
+    "pre_pr": {
+      "type": ["object", "null"],
+      "description": "Optional latest read-only pre-PR result; its detailed result schema is owned by issue_preflight.py."
+    },
     "task_inventory": {
       "type": ["object", "null"],
       "properties": {

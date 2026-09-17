@@ -37,7 +37,11 @@ Read only the reference needed for the current operation:
 - `cleanup`: [references/cleanup.md](references/cleanup.md) and [references/adapters.md](references/adapters.md).
 - Registry validation: [references/registry-schema.json](references/registry-schema.json).
 
-Use `scripts/pw-helper` for deterministic registry, lock, fingerprint, ownership, and Git mutations. Run `pw-helper --help` for supported operations. The helper does not authorize commits, pushes, PRs, archives, or destructive cleanup; obtain the authorization required by `git-workflow` and this skill first.
+Use `scripts/pw-helper` for deterministic registry, lock, fingerprint, ownership, and Git mutations. For an
+Issue-linked implementation or resume, collect and validate the [Issue preflight](../git-workflow/references/issue-preflight.md)
+packet before entering `implementing`; the helper rechecks it at stage/commit/push/pre-PR boundaries. A satisfied
+or unknown packet blocks writes. Repo-local lifecycle runners apply the same contract through their existing owner
+and lock path. Run `pw-helper --help` for supported operations. The helper does not authorize commits, pushes, PRs, archives, or destructive cleanup; obtain the authorization required by `git-workflow` and this skill first.
 
 ## Risk And Workflow Delegation
 

@@ -22,6 +22,14 @@ threat-model、再レビューは [`delivery.md`](../codex/skills/git-workflow/r
 
 ## 通常経路とWorktree分離
 
+Issue-linked implementation/start/resume/delivery は [`issue-preflight.md`](../codex/skills/git-workflow/references/issue-preflight.md)
+の必要性 gate を通します。live な `origin/<branch>` target、Issue relevant hash、関連 PR、source/test evidence を一度に収集し、
+creation base と現在の target を分け、各 requirement の explicit assessment を target SHA と Issue hash に bind します。
+`satisfied` は edit/PR を止め、`unknown` は read-only 調査、確認済み `needs_work` だけを implementation に進めます。
+active lifecycle の implementing、resume、stage、commit、push、pre-PR は repository-local adapter が既存の `pw-helper` owner、
+operation、lock、scope を継承して再検証します。新しい unmanaged work だけ repo-local runner を使い、registry や Worktree を二重管理しません。
+これは修正依頼に Issue 作成を強制せず、stage/publication 認可も付与しません。
+
 - Coordinator/main は read-only の Git/GitHub 調査、target resolution、status/diff、Plan/TDD を行います。
   R0 は clean checkout で直接実装できます。R1〜R4 は `git fetch origin` を一度だけ行い、
   `origin/<default-branch>` から専用 Worktree を作成して、その中で source edit と targeted test を行います。

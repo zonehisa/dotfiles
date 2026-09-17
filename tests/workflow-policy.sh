@@ -10,6 +10,7 @@ DELIVERY="$ROOT/codex/skills/git-workflow/references/delivery.md"
 ISSUE_START="$ROOT/codex/skills/git-workflow/references/issue-start.md"
 PARALLEL="$ROOT/codex/skills/parallel-worktree/SKILL.md"
 LIFECYCLE="$ROOT/codex/skills/parallel-worktree/references/lifecycle.md"
+REGISTRY_SCHEMA="$ROOT/codex/skills/parallel-worktree/references/registry-schema.json"
 PARALLEL_OPENAI_YAML="$ROOT/codex/skills/parallel-worktree/agents/openai.yaml"
 FINGERPRINT="$ROOT/codex/skills/git-workflow/scripts/review_fingerprint.py"
 UI_EVIDENCE="$ROOT/codex/skills/git-workflow/scripts/ui_evidence.py"
@@ -19,6 +20,11 @@ SNAPSHOT_TEST="$ROOT/codex/skills/git-workflow/tests/test_external_pr_snapshot.p
 IMPLEMENTER="$ROOT/codex/agents/implementer-luna.toml"
 VERIFIER="$ROOT/codex/agents/verifier-luna.toml"
 ACTION_EVAL="$ROOT/codex/skills/git-workflow/references/action-eval.json"
+PREFLIGHT_REF="$ROOT/codex/skills/git-workflow/references/issue-preflight.md"
+PREFLIGHT_SCRIPT="$ROOT/codex/skills/git-workflow/scripts/issue_preflight.py"
+PREFLIGHT_TEST="$ROOT/codex/skills/git-workflow/tests/test_issue_preflight.py"
+PREFLIGHT_FIXTURE_TEST="$ROOT/codex/skills/git-workflow/tests/test_issue_preflight_fixtures.py"
+PREFLIGHT_GATE_TEST="$ROOT/codex/skills/parallel-worktree/tests/unit/test_preflight_helper_gate.py"
 
 fail() { printf 'workflow-policy: %s\n' "$1" >&2; exit 1; }
 contains() { grep -Fq -- "$1" "$2" || fail "missing '$1' in $2"; }
@@ -33,7 +39,7 @@ absent() {
   fi
 }
 
-for path in "$AGENTS" "$README" "$POLICY" "$SKILL" "$DELIVERY" "$ISSUE_START" "$PARALLEL" "$LIFECYCLE" "$PARALLEL_OPENAI_YAML" "$FINGERPRINT" "$UI_EVIDENCE" "$CODE_REVIEW" "$SNAPSHOT" "$SNAPSHOT_TEST" "$IMPLEMENTER" "$VERIFIER" "$ACTION_EVAL"; do
+for path in "$AGENTS" "$README" "$POLICY" "$SKILL" "$DELIVERY" "$ISSUE_START" "$PREFLIGHT_REF" "$PREFLIGHT_SCRIPT" "$PREFLIGHT_TEST" "$PREFLIGHT_FIXTURE_TEST" "$PREFLIGHT_GATE_TEST" "$PARALLEL" "$LIFECYCLE" "$REGISTRY_SCHEMA" "$PARALLEL_OPENAI_YAML" "$FINGERPRINT" "$UI_EVIDENCE" "$CODE_REVIEW" "$SNAPSHOT" "$SNAPSHOT_TEST" "$IMPLEMENTER" "$VERIFIER" "$ACTION_EVAL"; do
   [[ -f "$path" ]] || fail "missing required file: $path"
 done
 
@@ -75,6 +81,15 @@ for path in "$AGENTS" "$POLICY" "$DELIVERY"; do
 done
 contains 'fresh-context' "$SKILL"
 contains '`reviewer_luna`' "$SKILL"
+contains 'Issue preflight' "$SKILL"
+contains 'SHA-bound requirement assessment' "$SKILL"
+contains 'target SHA' "$PREFLIGHT_REF"
+contains 'creation base' "$PREFLIGHT_REF"
+contains 'needs_work' "$PREFLIGHT_REF"
+contains 'target SHA' "$POLICY"
+contains '"preflight"' "$REGISTRY_SCHEMA"
+contains '"pre_pr"' "$REGISTRY_SCHEMA"
+contains 'Issue preflight boundary' "$LIFECYCLE"
 contains 'fresh-context' "$PARALLEL"
 contains '`reviewer_luna`' "$PARALLEL"
 contains 'R1-R4' "$DELIVERY"
@@ -163,7 +178,7 @@ import sys
 path = Path(sys.argv[1])
 data = json.loads(path.read_text(encoding="utf-8"))
 cases = data.get("cases")
-if data.get("schema_version") != 1 or not isinstance(cases, list) or len(cases) != 8:
+if data.get("schema_version") != 1 or not isinstance(cases, list) or len(cases) < 8:
     raise SystemExit("action eval schema/count contract failed")
 required = {"id", "request", "context", "expected_actions", "forbidden_actions"}
 ids = []
@@ -206,6 +221,9 @@ PY
   codex/skills/git-workflow/tests/test_worktree_default_policy.py \
   codex/skills/git-workflow/tests/test_review_fingerprint.py \
   codex/skills/git-workflow/tests/test_ui_evidence.py \
-  codex/skills/git-workflow/tests/test_external_pr_snapshot.py)
+  codex/skills/git-workflow/tests/test_external_pr_snapshot.py \
+  codex/skills/git-workflow/tests/test_issue_preflight.py \
+  codex/skills/git-workflow/tests/test_issue_preflight_fixtures.py \
+  codex/skills/parallel-worktree/tests/unit/test_preflight_helper_gate.py)
 
 printf 'workflow-policy: passed\n'

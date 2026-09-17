@@ -6,6 +6,12 @@ remote default branch. The Coordinator/main role remains the owner of the select
 
 ## Route and preparation
 
+For an Issue-linked delivery, validate the [Issue preflight](issue-preflight.md) packet at the delivery
+boundary. Re-fetch and bind the Issue hash, live `origin/<branch>` target, related PR context, and the
+explicit `needs_work` assessments before stage/commit/push. A satisfied or unknown result blocks the
+write. Before PR readiness, `pw-helper` also checks the clean worktree, submitted head, isolated virtual
+merge conflict, and non-empty effective merge delta against the current base.
+
 - Coordinator/main performs discovery and planning, may implement R0 directly, and may edit/test directly
   inside the selected R1-R4 Worktree. Before source edits, verify the Worktree realpath and branch; preserve
   the primary checkout and all unrelated staged, unstaged, untracked, and ignored files.

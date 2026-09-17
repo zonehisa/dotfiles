@@ -48,6 +48,7 @@ Handle Git and GitHub work using repository conventions discovered at runtime.
 - Use the scoped `reviewer_luna` subagent for every R1-R4 completion gate, with no inherited implementation turns. Do not use `reviewer_luna` for operator work.
 - Do not recommend or perform merge while required CI checks are pending or failing. This gate has no conversational override.
 - When a task is owned by an active `parallel-worktree` registry/context packet, keep read-only Git inspection here but route every mutating Git operation through that skill's `pw-helper`. Never bypass its operation ID, ownership, scope, lock, or cleanup checks.
+- For Issue-linked implementation, resume, delivery, or PR preparation, apply the deterministic [Issue preflight](references/issue-preflight.md) gate. It separates the frozen creation base from the live origin target and requires an explicit, SHA-bound requirement assessment; Issue/PR state or keyword matches alone are not proof.
 
 ## Route to One Reference
 
@@ -55,6 +56,7 @@ Read only the reference required for the current operation. Do not preload the o
 
 - Create or triage an Issue, or `ic`: read [references/issues.md](references/issues.md).
 - Start Issue work, create its branch, plan it, or `is`: read [references/issue-start.md](references/issue-start.md).
+- Collect or validate Issue necessity evidence: read [references/issue-preflight.md](references/issue-preflight.md).
 - Commit, prepare/create a PR, or run the risk-routed completion gate (`cm`, `pr`, explicit review, or completion): read [references/delivery.md](references/delivery.md).
 - Review a PR/local diff or address review feedback (`prr`, `prf`): read [references/code-review.md](references/code-review.md).
 

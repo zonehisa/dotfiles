@@ -31,19 +31,23 @@ R1-R4 implementation starts in an Issue-dedicated Worktree from the latest remot
 1. Run `git status --short`, identify staged/unstaged/untracked work, and preserve unrelated changes.
 2. Resolve the Issue and repository target, then inspect the relevant code, policy, and tests before
    asking questions. Use at most three related Issues only when the relationship is strong and useful.
-3. For R1-R4, provision or resume the Issue-dedicated Worktree from the frozen remote base and verify its
+3. For an Issue-linked implementation, run the [Issue preflight](issue-preflight.md) collect/assessment flow:
+   re-fetch the live origin target and Issue/related-PR context, bind each explicit requirement assessment to
+   the current target SHA and Issue hash, and preserve the recorded creation base. `satisfied` stops edits/PR;
+   `unknown` permits read-only investigation only; start implementation only for confirmed `needs_work`.
+4. For R1-R4, provision or resume the Issue-dedicated Worktree from the frozen remote base and verify its
    realpath/branch before any source edit. For R0, use only a clean checkout. Never switch a dirty checkout
    or overwrite another lifecycle's files.
-4. Use Plan/TDD for workflow changes: state scope, success criteria, acceptance scenarios, risks, and
+5. Use Plan/TDD for workflow changes: state scope, success criteria, acceptance scenarios, risks, and
    targeted tests. Use one-question dig only for an unresolved material decision.
-5. Implement the smallest change in the selected writer context and run targeted tests. For UI, follow
+6. Implement the smallest change in the selected writer context and run targeted tests. For UI, follow
    `delivery.md` in this order: tests and technical verification -> completion review -> Coordinator
    final IAB -> verifier read-only packet check -> human appearance/primary-behavior acceptance.
-6. Save required Issue context only when repository conventions require it. A fix/change request alone
+7. Save required Issue context only when repository conventions require it. A fix/change request alone
    does not authorize staging or publication; continue read-only investigation, diff organization,
    non-staging review preparation, and tests until the staging gate. Do not commit, push, merge, or
    create a PR from this reference; those are separate explicitly authorized delivery operations.
-7. Report the Issue, branch or checkout, changed paths, tests, and unresolved decisions.
+8. Report the Issue, branch or checkout, changed paths, tests, and unresolved decisions.
 
 If the current mode prohibits a local mutation, complete investigation and planning first, then resume
 in an execution-capable mode. Missing authorization is never inferred from the Issue or branch name.

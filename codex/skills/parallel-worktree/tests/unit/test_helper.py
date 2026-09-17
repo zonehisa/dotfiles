@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -11,10 +12,16 @@ import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 
 SKILL = Path(__file__).resolve().parents[2]
 HELPER = SKILL / "scripts" / "pw-helper"
+PREFLIGHT_SCRIPT = SKILL.parent / "git-workflow" / "scripts" / "issue_preflight.py"
+PREFLIGHT_SPEC = importlib.util.spec_from_file_location("helper_test_preflight", PREFLIGHT_SCRIPT)
+assert PREFLIGHT_SPEC and PREFLIGHT_SPEC.loader
+PREFLIGHT = importlib.util.module_from_spec(PREFLIGHT_SPEC)
+PREFLIGHT_SPEC.loader.exec_module(PREFLIGHT)
 
 
 def run(*args: str, env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess:
@@ -46,6 +53,9 @@ class HelperTest(unittest.TestCase):
         git(self.repo, "push", "-u", "origin", "main")
         subprocess.run(["git", "--git-dir", str(self.origin), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
         git(self.repo, "fetch", "origin")
+        fixture_remote = "https://github.com/fixture/repo.git"
+        git(self.repo, "remote", "set-url", "origin", fixture_remote)
+        git(self.repo, "config", f"url.{self.origin}.insteadOf", fixture_remote)
         self.env = {"CODEX_HOME": str(self.codex_home)}
 
     def tearDown(self) -> None:
@@ -53,6 +63,66 @@ class HelperTest(unittest.TestCase):
 
     def helper_json(self, *args: str) -> dict:
         return json.loads(run(*args, env=self.env).stdout)
+
+    def attach_missing_preflight(self, record: dict) -> dict:
+        """Attach a real packet so write-path tests exercise pw-helper's gate."""
+
+        issue = int(record["issue"])
+        slug = PREFLIGHT.repository_identity(self.repo).get("slug") or "fixture/repo"
+        fixture = self.codex_home / "preflight-gh.json"
+        fixture.write_text(json.dumps({
+            "repo": {"nameWithOwner": slug, "defaultBranchRef": {"name": record["base_branch"]}},
+            "issue": {"number": issue, "title": "Fixture", "body": "", "state": "OPEN", "url": f"https://example.invalid/{slug}/issues/{issue}", "updatedAt": "2026-09-16T00:00:00Z", "closedAt": None, "labels": []},
+        }))
+        fake_bin = self.codex_home / "preflight-bin"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        fake_gh = fake_bin / "gh"
+        fake_gh.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, sys\n"
+            "d=json.loads(open(os.environ['PREFLIGHT_FIXTURE']).read()); a=sys.argv[1:]\n"
+            "if a[:2]==['repo','view']: v=d['repo']\n"
+            "elif a[:2]==['issue','view']: v=d['issue']\n"
+            "elif a[:1]==['api']: v=[]\n"
+            "elif a[:2]==['pr','list']: v=[]\n"
+            "else: raise SystemExit(2)\n"
+            "print(json.dumps(v))\n"
+        )
+        fake_gh.chmod(0o700)
+        self.env["PATH"] = f"{fake_bin}{os.pathsep}{os.environ['PATH']}"
+        self.env["PREFLIGHT_FIXTURE"] = str(fixture)
+        criteria = [{
+            "id": "gap",
+            "requirement": "the requested behavior",
+            "source": [{"path": "README.md", "exists": True}],
+        }]
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            first = PREFLIGHT.collect_evidence(
+                self.repo, issue, criteria=criteria,
+                target=record["base_remote_ref"], creation_base=record["base_remote_ref"], fetch=True,
+            )
+            assessed = json.loads(json.dumps(criteria))
+            assessed[0]["assessment"] = {
+                "status": "missing",
+                "rationale": "The fixture target does not contain the requested behavior.",
+                "residual_scope": "Implement and test the behavior.",
+                "assessed_target_sha": first["current_target"]["sha"],
+                "assessed_issue_relevant_sha256": first["issue_relevant"]["sha256"],
+            }
+            evidence = PREFLIGHT.collect_evidence(
+                self.repo, issue, criteria=assessed,
+                target=record["base_remote_ref"], creation_base=record["base_remote_ref"], fetch=True,
+            )
+        registry = self.codex_home / "parallel-worktree" / record["repository_id"]
+        evidence_dir = registry / "evidence"
+        evidence_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        packet = evidence_dir / "test-preflight.json"
+        packet.write_text(json.dumps(evidence, indent=2, sort_keys=True))
+        packet.chmod(0o600)
+        return self.helper_json(
+            "record-preflight", "--repo", str(self.repo), "--issue", str(issue),
+            "--operation", record["operation_id"], "--caller-task-id", record.get("owner_task_id") or f"owner-{issue}", "--evidence-file", str(packet),
+        )
 
     def test_repository_id_is_stable(self) -> None:
         first = self.helper_json("repository-id", "--repo", str(self.repo))
@@ -205,7 +275,7 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(created["primary_digest_before"], created["primary_digest_after"])
         registry_dir = self.codex_home / "parallel-worktree" / record["repository_id"]
         evidence_dir = registry_dir / "evidence"
-        evidence_dir.mkdir(mode=0o700)
+        evidence_dir.mkdir(mode=0o700, exist_ok=True)
         status_evidence = evidence_dir / "status.json"
         status_evidence.write_text(json.dumps({
             "cwd": created["worktree_path"],
@@ -504,6 +574,7 @@ class HelperTest(unittest.TestCase):
         self.helper_json("record-owner", "--repo", str(self.repo), "--issue", "131", "--operation", operation, "--owner-task-id", "owner-131")
         self.helper_json("record-permission", "--repo", str(self.repo), "--issue", "131", "--operation", operation, "--evidence-sha256", "c" * 64)
         created = self.helper_json("branch-create", "--repo", str(self.repo), "--issue", "131", "--operation", operation, "--caller-task-id", "owner-131")
+        self.attach_missing_preflight(record)
         self.helper_json("set-scope", "--repo", str(self.repo), "--issue", "131", "--operation", operation, "--allow", "allowed")
         child = Path(created["worktree_path"])
         (child / "outside.txt").write_text("outside\n")
@@ -540,6 +611,11 @@ class HelperTest(unittest.TestCase):
             "branch-create", "--repo", str(self.repo), "--issue", "133", "--operation", operation,
             "--caller-task-id", "owner-133",
         )
+        child = Path(created["worktree_path"])
+        (child / "preflight-gated-change.txt").write_text("change\n")
+        git(child, "add", "preflight-gated-change.txt")
+        git(child, "commit", "-m", "preflight gated change")
+        self.attach_missing_preflight(record)
         self.helper_json(
             "push", "--repo", str(self.repo), "--issue", "133", "--operation", operation,
             "--caller-task-id", "owner-133",
@@ -580,7 +656,7 @@ class HelperTest(unittest.TestCase):
             "--operation", operation, "--number", "133",
         )
         evidence_dir = registry_dir / "evidence"
-        evidence_dir.mkdir(mode=0o700)
+        evidence_dir.mkdir(mode=0o700, exist_ok=True)
         evidence = evidence_dir / "tasks.json"
         evidence.write_text(json.dumps({
             "cwd": created["worktree_path"],

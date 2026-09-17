@@ -9,6 +9,14 @@ Resume the same Worktree for an existing Issue lifecycle; do not provision a sec
 
 This skill owns primary-checkout protection, base selection, registry/lease management, worktree ownership, resource reservations, task tracking, and cleanup. Delegate implementation, TDD, commit, review, and PR conventions to `git-workflow`. Delegate cross-repository or shared-contract work to `issue-orchestrator`.
 
+## Issue preflight boundary
+
+Before an Issue-linked implementation or resume, collect the live origin target, Issue/related-PR context, and
+explicit requirement assessments bound to the target SHA and Issue hash. Keep the frozen `base_sha_at_start`
+separate from the current target. `satisfied` stops edits/PR, `unknown` permits read-only investigation, and only
+confirmed `needs_work` enters `implementing`. `pw-helper` rechecks the packet under its operation/repository locks
+at active write boundaries; a repo-local runner uses the same contract through its existing lifecycle owner.
+
 ## State Machine
 
 Normal transitions:

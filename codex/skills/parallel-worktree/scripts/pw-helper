@@ -7,6 +7,7 @@ import argparse
 import datetime as dt
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -52,6 +53,25 @@ HIGH_RISK_PATH = re.compile(
     re.IGNORECASE,
 )
 TOKEN_RE = re.compile(r"(?i)(token|password|passwd|secret|credential)=([^\s&]+)")
+
+
+def load_issue_preflight() -> Any:
+    """Load the sibling preflight module without assuming an install prefix.
+
+    ``pw-helper`` is installed beside ``git-workflow`` in some environments and
+    beside a realpath/symlink in others.  Resolve this file before deriving the
+    sibling path so the active installation, rather than the source checkout,
+    owns the context collector.
+    """
+
+    helper_path = Path(os.path.realpath(__file__))
+    preflight_path = helper_path.parents[2] / "git-workflow" / "scripts" / "issue_preflight.py"
+    spec = importlib.util.spec_from_file_location("codex_issue_preflight", preflight_path)
+    if spec is None or spec.loader is None:
+        raise HelperError(f"Issue preflight module is unavailable: {preflight_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class HelperError(RuntimeError):
@@ -495,6 +515,100 @@ def require_owner(record: dict[str, Any], caller_task_id: str) -> None:
         raise HelperError("Child permission profile is not verified")
 
 
+def preflight_evidence_path(record_path: Path, raw: str) -> Path:
+    """Resolve a preflight packet inside the private registry evidence area."""
+
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        if path.parts and path.parts[0] == "evidence":
+            path = record_path.parent / path
+        else:
+            path = record_path.parent / "evidence" / path
+    return private_evidence_file(record_path, str(path), "evidence")
+
+
+def read_preflight_packet(record: dict[str, Any], record_path: Path) -> tuple[dict[str, Any], Path]:
+    packet = record.get("preflight")
+    if not isinstance(packet, dict):
+        raise HelperError("Issue preflight evidence is required before this lifecycle write")
+    raw_path = packet.get("evidence_file")
+    if not isinstance(raw_path, str) or not raw_path:
+        raise HelperError("Issue preflight evidence file is missing")
+    evidence_path = preflight_evidence_path(record_path, raw_path)
+    try:
+        evidence = json.loads(evidence_path.read_text())
+    except (OSError, ValueError) as exc:
+        raise HelperError("Issue preflight evidence cannot be read") from exc
+    if not isinstance(evidence, dict):
+        raise HelperError("Issue preflight evidence must be an object")
+    digest = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    if packet.get("evidence_sha256") != digest:
+        raise HelperError("Issue preflight evidence digest is stale")
+    return evidence, evidence_path
+
+
+def require_preflight(record: dict[str, Any], record_path: Path, repo: Path, action: str) -> dict[str, Any]:
+    """Require a fresh, code-backed ``needs_work`` packet for an active write.
+
+    A satisfied packet is deliberately a hard stop: the harness must prevent a
+    duplicate edit/PR.  Unknown packets require read-only investigation first.
+    Every active lifecycle boundary refreshes the fetch/API context through the
+    existing operation and repository locks before checking the bound target
+    tree and registry identity.  Read-only ``--no-refresh`` validation is a
+    diagnostic only and cannot authorize a write.
+    """
+
+    preflight = record.get("preflight")
+    if not isinstance(preflight, dict):
+        raise HelperError(f"{action} requires verified Issue preflight evidence")
+    evidence, _ = read_preflight_packet(record, record_path)
+    module = load_issue_preflight()
+    refreshed = module.validate_evidence(repo, evidence, refresh=True)
+    if not refreshed.get("valid"):
+        raise HelperError(f"{action} requires current Issue preflight evidence: {'; '.join(refreshed.get('errors', []))}")
+    evidence = refreshed.get("current") or evidence
+    if evidence.get("decision") != "needs_work":
+        decision = evidence.get("decision", "unknown")
+        if decision == "satisfied":
+            raise HelperError(f"{action} is blocked because the Issue is already satisfied; no edit or PR is allowed")
+        raise HelperError(f"{action} is blocked because Issue preflight is {decision}; investigate read-only")
+    target = evidence.get("current_target") or {}
+    target_sha = target.get("sha")
+    target_ref = target.get("ref")
+    if (
+        preflight.get("target_sha") != target_sha
+        or target_ref != record.get("base_remote_ref")
+        or not isinstance(target_ref, str)
+        or not target_ref.startswith("refs/remotes/origin/")
+        or record.get("base_branch") is None
+    ):
+        raise HelperError(f"{action} requires a target-bound Issue preflight packet")
+    current_target = resolve_registry_target_sha(repo, record, target)
+    if current_target != target_sha:
+        raise HelperError(f"{action} requires a fresh Issue preflight after the target ref moved")
+    if preflight.get("issue_relevant_sha256") != (evidence.get("issue_relevant") or {}).get("sha256"):
+        raise HelperError(f"{action} requires an unmodified Issue evidence hash")
+    creation_base = evidence.get("creation_base") or {}
+    creation_sha = creation_base.get("sha") if isinstance(creation_base, dict) else None
+    if creation_sha != record.get("base_sha_at_start"):
+        raise HelperError(f"{action} requires the registry creation base SHA")
+    if module.resolve_commit(repo, creation_sha, check=False) != creation_sha:
+        raise HelperError(f"{action} requires an available registry creation base SHA")
+    if preflight.get("creation_base_sha") != record.get("base_sha_at_start"):
+        raise HelperError(f"{action} requires a creation-base-bound Issue preflight packet")
+    return evidence
+
+
+def resolve_registry_target_sha(repo: Path, record: dict[str, Any], target: dict[str, Any]) -> str | None:
+    """Resolve the evidence target without changing refs or fetching."""
+
+    ref = target.get("ref")
+    if not isinstance(ref, str):
+        return None
+    value = run_git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}", check=False).stdout.strip()
+    return value or None
+
+
 def safe_child_path(record: dict[str, Any]) -> Path:
     raw = record.get("worktree_path")
     if not raw:
@@ -615,7 +729,7 @@ def command_transition(args: argparse.Namespace) -> dict[str, Any]:
     meta, issue, path, _ = load_context(args)
     if args.to_state not in ALL_STATES:
         raise HelperError("Unknown target state")
-    with operation_locks(meta, issue, repo_needed=False):
+    with operation_locks(meta, issue, repo_needed=args.to_state == "implementing"):
         record = read_registry(path)
         require_operation(record, args.operation)
         current = record["state"]
@@ -623,6 +737,8 @@ def command_transition(args: argparse.Namespace) -> dict[str, Any]:
             raise HelperError("Cleanup states may only be entered by dedicated cleanup commands")
         if args.from_state and record["state"] != args.from_state:
             raise HelperError(f"Expected state {args.from_state}, found {record['state']}")
+        if args.to_state == "implementing":
+            require_preflight(record, path, Path(record["repository"]), "entering implementing")
         if current in ERROR_STATES:
             if args.to_state != record.get("resume_state"):
                 raise HelperError("Exceptional state may only return to its recorded resume_state")
@@ -772,6 +888,17 @@ def command_resume_operation(args: argparse.Namespace) -> dict[str, Any]:
                     raise HelperError("Existing child branch does not match registry ownership")
         elif record["state"] != "provisioning" and not cleanup_removed:
             raise HelperError("Registered worktree is missing outside provisioning")
+        if effective_state == "implementing":
+            try:
+                require_preflight(record, path, Path(record["repository"]), "resume")
+            except HelperError as exc:
+                # An expired lease never grants an implementation permission.
+                # Preserve the resource and make the missing investigation
+                # explicit; the next operation must attach fresh evidence and
+                # return through the normal exceptional-state transition.
+                record["resume_state"] = "implementing"
+                record["state"] = "blocked"
+                record["last_error"] = sanitized(str(exc))
         previous = record["operation_id"]
         record["previous_operation_id"] = previous
         record["operation_id"] = str(uuid.uuid4())
@@ -877,6 +1004,153 @@ def command_set_scope(args: argparse.Namespace) -> dict[str, Any]:
         record["scope"] = {"allowed": allowed, "forbidden": forbidden}
         atomic_write(path, record)
         return record
+
+
+def _write_private_preflight(record_path: Path, evidence: dict[str, Any], name: str) -> Path:
+    directory = record_path.parent / "evidence"
+    ensure_private_dir(directory)
+    destination = directory / name
+    if destination.exists() or destination.is_symlink():
+        raise HelperError("Preflight evidence destination already exists")
+    destination.write_bytes(json.dumps(evidence, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n")
+    os.chmod(destination, 0o600)
+    return destination
+
+
+def _attach_preflight(record: dict[str, Any], record_path: Path, evidence: dict[str, Any], evidence_path: Path) -> None:
+    module = load_issue_preflight()
+    bound = module.validate_bound_evidence(record["repository"], evidence)
+    if not bound.get("valid"):
+        raise HelperError("Issue preflight evidence is not bound to the current target: " + "; ".join(bound.get("errors", [])))
+    issue_number = int((evidence.get("issue") or {}).get("number", 0))
+    if issue_number != int(record["issue"]):
+        raise HelperError("Issue preflight evidence targets a different Issue")
+    target = evidence.get("current_target") or {}
+    base = evidence.get("creation_base") or {}
+    if target.get("sha") is None or base.get("sha") != record.get("base_sha_at_start"):
+        raise HelperError("Issue preflight evidence does not preserve the frozen creation base")
+    if target.get("ref") != record.get("base_remote_ref") or not str(target.get("ref", "")).startswith("refs/remotes/origin/"):
+        raise HelperError("Issue preflight evidence does not target the registered origin branch")
+    relative = evidence_path.relative_to(record_path.parent).as_posix()
+    record["preflight"] = {
+        "evidence_file": relative,
+        "evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+        "decision": evidence.get("decision"),
+        "issue_relevant_sha256": (evidence.get("issue_relevant") or {}).get("sha256"),
+        "target_ref": target.get("ref"),
+        "target_sha": target.get("sha"),
+        "creation_base_ref": base.get("ref"),
+        "creation_base_sha": base.get("sha"),
+        "recorded_at": utc_now(),
+    }
+
+
+def command_preflight_collect(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    module = load_issue_preflight()
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        require_owner(record, args.caller_task_id)
+        criteria = module.load_criteria(args.criteria_file)
+        evidence = module.collect_evidence(
+            record["repository"],
+            issue,
+            criteria=criteria,
+            target=args.target or record["base_remote_ref"],
+            creation_base=record["base_sha_at_start"],
+            fetch=True,
+        )
+        # The registry's creation base is immutable, even when the collector
+        # had to resolve a moving remote ref before its single fetch.
+        evidence["creation_base"] = {
+            "ref": record["base_remote_ref"],
+            "sha": record["base_sha_at_start"],
+            "captured_before_fetch": False,
+        }
+        name = f"preflight-{issue}-{hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest()[:16]}.json"
+        evidence_path = _write_private_preflight(path, evidence, name)
+        _attach_preflight(record, path, evidence, evidence_path)
+        atomic_write(path, record)
+        return {"evidence_file": str(evidence_path), "decision": evidence.get("decision"), "evidence": evidence, "registry": record}
+
+
+def command_record_preflight(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args)
+    with operation_locks(meta, issue, repo_needed=True):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        require_owner(record, args.caller_task_id)
+        evidence_path = preflight_evidence_path(path, args.evidence_file)
+        try:
+            evidence = json.loads(evidence_path.read_text())
+        except (OSError, ValueError) as exc:
+            raise HelperError("Issue preflight evidence cannot be read") from exc
+        if not isinstance(evidence, dict):
+            raise HelperError("Issue preflight evidence must be an object")
+        _attach_preflight(record, path, evidence, evidence_path)
+        atomic_write(path, record)
+        return record
+
+
+def command_preflight_validate(args: argparse.Namespace) -> dict[str, Any]:
+    module = load_issue_preflight()
+    meta, issue, path, _ = load_context(args, repo_needed=not args.no_refresh)
+    if args.no_refresh:
+        record = read_registry(path)
+        evidence_path = preflight_evidence_path(path, args.evidence_file)
+        try:
+            evidence = json.loads(evidence_path.read_text())
+        except (OSError, ValueError) as exc:
+            raise HelperError("Issue preflight evidence cannot be read") from exc
+        if not isinstance(evidence, dict):
+            raise HelperError("Issue preflight evidence must be an object")
+        return module.validate_evidence(record["repository"], evidence, refresh=False)
+    if not args.operation or not args.caller_task_id:
+        raise HelperError("refreshing preflight validation requires --operation and --caller-task-id")
+    with operation_locks(meta, issue, repo_needed=True):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        require_owner(record, args.caller_task_id)
+        evidence_path = preflight_evidence_path(path, args.evidence_file)
+        try:
+            evidence = json.loads(evidence_path.read_text())
+        except (OSError, ValueError) as exc:
+            raise HelperError("Issue preflight evidence cannot be read") from exc
+        if not isinstance(evidence, dict):
+            raise HelperError("Issue preflight evidence must be an object")
+        return module.validate_evidence(record["repository"], evidence, refresh=True)
+
+
+def command_pre_pr(args: argparse.Namespace) -> dict[str, Any]:
+    meta, issue, path, _ = load_context(args, repo_needed=True)
+    module = load_issue_preflight()
+    with operation_locks(meta, issue):
+        record = read_registry(path)
+        require_operation(record, args.operation)
+        require_owner(record, args.caller_task_id)
+        evidence = require_preflight(record, path, Path(record["repository"]), "pre-PR validation")
+        child = safe_child_path(record)
+        branch = run_git(child, "branch", "--show-current").stdout.strip()
+        if branch != record.get("actual_branch") or branch != record.get("planned_branch"):
+            raise HelperError("Submitted Worktree branch does not match registry ownership")
+        head = run_git(child, "rev-parse", "HEAD").stdout.strip()
+        if args.head_sha and args.head_sha != head:
+            raise HelperError("Submitted head SHA does not match the current Worktree HEAD")
+        result = module.validate_pr(
+            child,
+            base_ref=record["base_remote_ref"],
+            head_sha=head,
+            expected_head_sha=args.head_sha or head,
+            related_prs=evidence.get("related_prs"),
+        )
+        result["ready"] = result.get("status") == "allow"
+        result["creation_base_sha"] = record["base_sha_at_start"]
+        record["pre_pr"] = result
+        atomic_write(path, record)
+        if not result["ready"]:
+            raise HelperError("pre-PR validation denied: " + "; ".join(result.get("reasons", [])))
+        return result
 
 
 def query_verified_pr(record: dict[str, Any], number: int) -> dict[str, Any]:
@@ -1113,6 +1387,7 @@ def command_stage_scope(args: argparse.Namespace) -> dict[str, Any]:
         record = read_registry(path)
         require_operation(record, args.operation)
         require_owner(record, args.caller_task_id)
+        require_preflight(record, path, Path(record["repository"]), "stage-scope")
         allowed = record.get("scope", {}).get("allowed", [])
         if not allowed:
             raise HelperError("Registry has no approved stage scope")
@@ -1142,6 +1417,7 @@ def command_commit(args: argparse.Namespace) -> dict[str, Any]:
         record = read_registry(path)
         require_operation(record, args.operation)
         require_owner(record, args.caller_task_id)
+        require_preflight(record, path, Path(record["repository"]), "commit")
         message = approved_message_file(path, args.message_file)
         child = safe_child_path(record)
         staged = enforce_scope(record, child, cached_only=True)
@@ -1157,12 +1433,31 @@ def command_push(args: argparse.Namespace) -> dict[str, Any]:
         record = read_registry(path)
         require_operation(record, args.operation)
         require_owner(record, args.caller_task_id)
+        evidence = require_preflight(record, path, Path(record["repository"]), "push")
         branch = record.get("actual_branch")
         if not branch or branch != record["planned_branch"]:
             raise HelperError("Actual branch does not match planned branch")
         child = safe_child_path(record)
+        current_branch = run_git(child, "branch", "--show-current").stdout.strip()
+        if current_branch != branch:
+            raise HelperError("Actual Worktree branch does not match the planned branch")
+        module = load_issue_preflight()
+        head = run_git(child, "rev-parse", "HEAD").stdout.strip()
+        pre_pr = module.validate_pr(
+            child,
+            base_ref=record["base_remote_ref"],
+            head_sha=head,
+            expected_head_sha=head,
+            related_prs=evidence.get("related_prs"),
+        )
+        if pre_pr.get("status") != "allow":
+            raise HelperError("push requires a valid pre-PR delta: " + "; ".join(pre_pr.get("reasons", [])))
+        pre_pr["ready"] = True
+        pre_pr["creation_base_sha"] = record["base_sha_at_start"]
+        record["pre_pr"] = pre_pr
+        atomic_write(path, record)
         run_git(child, "push", "-u", "origin", branch)
-        return {"branch": branch, "head": run_git(child, "rev-parse", "HEAD").stdout.strip()}
+        return {"branch": branch, "head": run_git(child, "rev-parse", "HEAD").stdout.strip(), "pre_pr": pre_pr}
 
 
 def command_worktree_remove(args: argparse.Namespace) -> dict[str, Any]:
@@ -1281,6 +1576,28 @@ def build_parser() -> argparse.ArgumentParser:
     item.add_argument("--operation", required=True)
     item.add_argument("--allow", action="append", default=[])
     item.add_argument("--forbid", action="append", default=[])
+
+    item = repo_issue("preflight-collect", command_preflight_collect)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--caller-task-id", required=True)
+    item.add_argument("--criteria-file", "--criteria", dest="criteria_file")
+    item.add_argument("--target")
+
+    item = repo_issue("record-preflight", command_record_preflight)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--caller-task-id", required=True)
+    item.add_argument("--evidence-file", required=True)
+
+    item = repo_issue("preflight-validate", command_preflight_validate)
+    item.add_argument("--evidence-file", required=True)
+    item.add_argument("--operation")
+    item.add_argument("--caller-task-id")
+    item.add_argument("--no-refresh", action="store_true")
+
+    item = repo_issue("pre-pr", command_pre_pr)
+    item.add_argument("--operation", required=True)
+    item.add_argument("--caller-task-id", required=True)
+    item.add_argument("--head-sha")
 
     item = repo_issue("verify-pr", command_verify_pr)
     item.add_argument("--operation", required=True)

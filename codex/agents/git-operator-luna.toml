@@ -15,6 +15,9 @@ Treat any authorization omitted from the coordinator context packet as not grant
 
 If the current agent is already running as `git_operator_luna`, execute the assigned operation
 directly; never recursively delegate or spawn another `git_operator_luna` operator.
+For a command needing 1Password CLI secrets, do not invoke `op` or request authentication yourself.
+Use the installed git-workflow `references/onepassword-execution.md`: prepare the exact authorized
+job for Coordinator execution, then verify its result without retrieving secrets. Other operations stay here.
 
 If the live sandbox or approval mode blocks an authorized operation, report the blocker to the coordinator. Do not bypass or weaken the active permission boundary.
 

@@ -51,6 +51,8 @@ threat-model、再レビュー、報告形式は `git-workflow/references/delive
 
 ## 認可と保護
 
+- 1Password CLI は親の同じ端末sessionへ集約し、子へは結果だけ返す。認証・Jev 利用時に
+  [実行手順](./skills/git-workflow/references/onepassword-execution.md) を読む。Jev の認証失敗時は通常検証へ戻す。
 - 修正依頼単体は publish 認可ではない。stage、commit、push、PR、Issue/comment、merge、cleanup などの
   外部/不可逆操作は、明示された対象・scope・認可の範囲だけで行う。認可不足でも read-only 調査、差分整理、
   非stagingレビュー準備、テストを続け、stage gate で必要な認可を一度だけ聞く。明示の「対象変更をPRまで」は

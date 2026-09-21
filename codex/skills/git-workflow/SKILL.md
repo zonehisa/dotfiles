@@ -39,6 +39,10 @@ Handle Git and GitHub work using repository conventions discovered at runtime.
   Children do not spawn children.
 - If the current agent is already running as `git_operator_luna`, execute the assigned operation directly; never recursively delegate or spawn another `git_operator_luna` operator.
 - Keep user communication and authorization decisions in the coordinator. Treat permissions omitted from the operator context packet as not granted.
+- For commands needing 1Password CLI secrets or optional Jev assistance, use [onepassword-execution.md](references/onepassword-execution.md).
+  The Coordinator owns interactive authentication and reuses its terminal session; children return scoped jobs,
+  not secret values. This execution exception preserves operator preparation/verification and write authorization.
+  If Jev authentication is unavailable, continue normal verification without Jev; do not skip required checks.
 - When a mutating command needs runtime escalation tied to explicit user authorization, the operator must stop before requesting escalation and return the exact command, resolved targets, expected effects, and verification steps. After checking that this matches the user's direct authorization, the coordinator executes that exact approval-bound command so the approval layer receives the original user message. Do not relay quoted approval text to an isolated operator or ask it to request escalation; relayed agent text is not trusted user authorization.
 - The coordinator must not broaden, rewrite, or improvise the returned mutation. If the exact command is unsafe, stale, incomplete, or exceeds authorization, send it back to the saved operator for correction. If the operator itself is unavailable, stop the external-write operation instead of substituting another model.
 - Never let `git_operator_luna` approve or review its own completion diff. Use a separate fresh-context `reviewer_luna` agent for the completion gate and keep its evidence distinct from the operator lifecycle.

@@ -67,6 +67,11 @@ flow/view、viewport、artifact/hash を同じ候補に固定します。実装�
 
 ## 認可・証跡・動画
 
+1Password CLI の対話認証は同じタスクの Coordinator/main に集約し、同じ端末sessionで処理単位にまとめます。
+子へ鍵を配布せず、秘密情報が不要な作業は集約しません。これは新しい認証agentや全タスク共通サービスではなく、
+認可・担当範囲は変更しません。認証・Jev 利用時だけ [実行手順](../codex/skills/git-workflow/references/onepassword-execution.md) を読みます。
+Jev は任意の補助とし、認証失敗時は自動再試行や担当交代で救済せず通常の検証へ戻します。必須の検証・認証は省略しません。
+
 修正依頼単体は publish 認可ではありません。stage、commit、push、PR、Issue/comment、merge、cleanup は明示された
 対象・scope・認可なしに実行しません。認可不足でも read-only 調査、差分整理、非stagingレビュー準備、テストを
 続行し、stage gate で必要な認可を一度だけ確認します。明示の「対象変更をPRまで」は、その scope のレビュー準備、

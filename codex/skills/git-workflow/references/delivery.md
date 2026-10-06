@@ -38,16 +38,64 @@ edit or UI check. Mixed scopes use the highest rank.
 | R3 | persistence, queries, state transitions, authorization, public contracts | fresh `reviewer_luna`, Luna `max`, read-only |
 | R4 | security boundaries, credible data-loss/corruption, concurrency/locking, critical incidents | fresh `reviewer_luna`, Luna `max`, read-only |
 
-Round 1 reviews the complete frozen scope. If only the patch/fix delta changes while acceptance
+### Review submission preflight
+
+Before sending an R1-R4 completion-review request, run `review_fingerprint.py` for the full staged
+scope and validate the structured request record:
+
+```bash
+python3 codex/skills/git-workflow/scripts/review_preflight.py validate --packet <review-packet.json>
+```
+
+The packet records the repository, Issue, branch/base, objective, frozen acceptance criteria, risk
+and reason, target paths, the exact supported-use declaration and its SHA-256, patch-base tree,
+`fingerprint_scope`, changed-path fingerprint and the full `changed_paths` records emitted by
+`review_fingerprint.py`, successful test evidence bound to that fingerprint, reviewer
+identity/role/model/effort/context, and round. The helper recomputes the versioned fingerprint from
+those records and checks every record path against `target_paths`. The Coordinator must retain the
+fingerprint command output for the complete staged scope; the helper does not query Git or prove that
+caller-supplied records came from that command. The helper fails closed on a
+missing field, a declaration/hash mismatch, changed paths outside the target scope, unsuccessful or
+stale test evidence, or a reviewer that does not meet the existing independent read-only route.
+It checks records; it does not run tests, classify risk, generate a declaration/hash, or authorize
+staging or publication. A Round 3 approval record must be bound to the current lifecycle/context/round
+and changed-path fingerprint, including the immutable declaration hash. The Coordinator must still
+verify its reference against actual direct user authorization; the helper cannot authenticate approval.
+It also cannot prove when a declaration was written: freeze it before the first review request and
+retain its source. Never backfill a missing historical hash from a later declaration; an old incomplete
+record cannot authorize review or delivery.
+
+When there is a prior completed review, compare the validated packet with that saved result before
+starting another reviewer:
+
+```bash
+python3 codex/skills/git-workflow/scripts/review_preflight.py compare \
+  --packet <review-packet.json> --previous-report <review-result.json>
+```
+
+The saved result must include `review_valid`, `completed`, the lifecycle/context/round keys, the
+changed-path fingerprint, the immutable declaration hash, reviewer agent ID/role/model/effort,
+fresh read-only context, round, and P0-P3 counts. A Round 3 request packet also requires a direct
+user-approval record bound to the current lifecycle/context/round and changed-path fingerprint. Exact
+matching context and fingerprint reuse the prior review and its findings;
+do not start a duplicate review or rerun
+successful tests. Reuse never clears P0-P2 blockers. A changed fingerprint with unchanged context
+requires the next bounded round from the same reviewer; a changed patch-base tree, objective, acceptance
+criterion, risk, target path, or declaration requires a new lifecycle and fresh reviewer. Missing or
+invalid prior evidence cannot authorize reuse. Keep the existing round cap, approval boundary, and
+risk-based completion gate.
+
+Round 1 reviews the complete frozen scope. If only the patch/fix delta changes while the objective, acceptance
 criteria, risk, target files, and the immutable threat-model declaration remain unchanged, reuse the
 same reviewer for the next numbered round. Round 2 sends only prior findings, their fix delta,
 directly affected paths, the new full-scope fingerprint, the same immutable
 `threat_model_supported_use_declaration_hash`, and successful existing evidence. A user-approved
 Round 3 is bounded by the same fields and is terminal. Skip a round when the patch and its review
-context are unchanged. Any change to acceptance criteria, risk, target files, or the immutable
-threat-model declaration starts a new lifecycle rather than a new round. Do not create another full
-lifecycle after two completed lifecycles in unchanged scope; repeated P0-P2 findings require
-simplification and an explicit user decision.
+context are unchanged. A changed patch-base tree, objective, acceptance criterion, risk, target path, or
+immutable threat-model declaration starts a new lifecycle with a fresh reviewer. A base ref or commit
+move with the same patch-base tree, changed-path fingerprint, and review context can reuse the saved
+result. Do not create another full lifecycle after two completed lifecycles in unchanged scope;
+repeated P0-P2 findings require simplification and an explicit user decision.
 
 Spawn one fresh reviewer per lifecycle and save its agent ID. Send bounded `Round N` follow-ups to
 that same reviewer. A missing reviewer, incomplete scope, or fingerprint mismatch invalidates the
@@ -55,12 +103,16 @@ review and blocks delivery; do not fall back to another task or model. Reviewers
 findings-first, read-only final with `review_valid`, P0-P3 counts, disposition, residual risk,
 unverified scope, and the supplied fingerprint. They do not rerun successful implementation tests.
 
-Construct `review_lifecycle_key` from repository, Issue/branch, base, and reviewer role. Construct
-`review_round_key` from that lifecycle key, `patch_base_tree`, and the changed-path fingerprint.
-Construct `review_context_key` from acceptance criteria, risk, target files, and the immutable
+Construct `review_lifecycle_key` from repository, Issue/branch, patch-base tree (the base content),
+and reviewer role. Keep base ref and base SHA in the packet for audit. A ref or commit move may reuse
+the prior result only when the patch-base tree and changed-path fingerprint are identical and the
+objective, acceptance criteria, risk, target paths, and declaration are unchanged. A changed patch-base tree
+starts a new lifecycle with a fresh reviewer. Construct `review_round_key` from that lifecycle key,
+`patch_base_tree`, and the changed-path fingerprint.
+Construct `review_context_key` from objective, acceptance criteria, risk, target files, and the
 `threat_model_supported_use_declaration_hash`. Reuse a bounded result only when these keys and the
-declaration/hash match. Any change to acceptance criteria, risk, target files, or the declaration/hash
-invalidates the context and requires a new lifecycle; Round 1, Round 2, and an authorized Round 3
+declaration/hash match. Any change to objective, acceptance criteria, risk, target files, or the
+declaration/hash invalidates the context and requires a new lifecycle; Round 1, Round 2, and an authorized Round 3
 carry the same immutable declaration/hash.
 
 P0-P2 findings block commit and PR. Classify each finding as accepted, rejected with evidence, or
@@ -89,7 +141,7 @@ Immediately before commit recompute the fingerprint. After commit use `--patch-b
 `index_matches_head=true` plus a matching path fingerprint. Before PR creation require a clean tree,
 matching branch/base/Issue, and the same reviewed HEAD or verified patch-equivalent fingerprint.
 A base move is reusable only when `patch_base_tree` and the changed-path fingerprint are identical,
-acceptance criteria/risk/target files are unchanged, and both records are retained.
+objective/acceptance criteria/risk/target files are unchanged, and both records are retained.
 
 ## User-visible UI gate
 

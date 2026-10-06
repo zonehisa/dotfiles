@@ -25,6 +25,9 @@ PREFLIGHT_SCRIPT="$ROOT/codex/skills/git-workflow/scripts/issue_preflight.py"
 PREFLIGHT_TEST="$ROOT/codex/skills/git-workflow/tests/test_issue_preflight.py"
 PREFLIGHT_FIXTURE_TEST="$ROOT/codex/skills/git-workflow/tests/test_issue_preflight_fixtures.py"
 PREFLIGHT_GATE_TEST="$ROOT/codex/skills/parallel-worktree/tests/unit/test_preflight_helper_gate.py"
+REVIEW_PREFLIGHT="$ROOT/codex/skills/git-workflow/scripts/review_preflight.py"
+REVIEW_PREFLIGHT_TEST="$ROOT/codex/skills/git-workflow/tests/test_review_preflight.py"
+REVIEW_PREFLIGHT_DOC_TEST="$ROOT/codex/skills/git-workflow/tests/test_review_preflight_docs.py"
 
 fail() { printf 'workflow-policy: %s\n' "$1" >&2; exit 1; }
 contains() { grep -Fq -- "$1" "$2" || fail "missing '$1' in $2"; }
@@ -39,7 +42,7 @@ absent() {
   fi
 }
 
-for path in "$AGENTS" "$README" "$POLICY" "$SKILL" "$DELIVERY" "$ISSUE_START" "$PREFLIGHT_REF" "$PREFLIGHT_SCRIPT" "$PREFLIGHT_TEST" "$PREFLIGHT_FIXTURE_TEST" "$PREFLIGHT_GATE_TEST" "$PARALLEL" "$LIFECYCLE" "$REGISTRY_SCHEMA" "$PARALLEL_OPENAI_YAML" "$FINGERPRINT" "$UI_EVIDENCE" "$CODE_REVIEW" "$SNAPSHOT" "$SNAPSHOT_TEST" "$IMPLEMENTER" "$VERIFIER" "$ACTION_EVAL"; do
+for path in "$AGENTS" "$README" "$POLICY" "$SKILL" "$DELIVERY" "$ISSUE_START" "$PREFLIGHT_REF" "$PREFLIGHT_SCRIPT" "$PREFLIGHT_TEST" "$PREFLIGHT_FIXTURE_TEST" "$PREFLIGHT_GATE_TEST" "$REVIEW_PREFLIGHT" "$REVIEW_PREFLIGHT_TEST" "$REVIEW_PREFLIGHT_DOC_TEST" "$PARALLEL" "$LIFECYCLE" "$REGISTRY_SCHEMA" "$PARALLEL_OPENAI_YAML" "$FINGERPRINT" "$UI_EVIDENCE" "$CODE_REVIEW" "$SNAPSHOT" "$SNAPSHOT_TEST" "$IMPLEMENTER" "$VERIFIER" "$ACTION_EVAL"; do
   [[ -f "$path" ]] || fail "missing required file: $path"
 done
 
@@ -97,6 +100,25 @@ contains 'fork_turns="none"' "$DELIVERY"
 contains 'same immutable' "$DELIVERY"
 contains 'review_context_key' "$DELIVERY"
 contains 'threat_model_supported_use_declaration_hash' "$DELIVERY"
+contains 'review_preflight.py validate' "$DELIVERY"
+contains 'review_preflight.py compare' "$DELIVERY"
+contains 'Never backfill a missing historical hash' "$DELIVERY"
+contains 'do not start a duplicate review or rerun' "$DELIVERY"
+contains 'skip_redundant_review' "$REVIEW_PREFLIGHT"
+contains 'different source fingerprint' "$REVIEW_PREFLIGHT"
+contains 'round3_approval_record' "$REVIEW_PREFLIGHT"
+contains '"changed_path_fingerprint": fingerprint' "$REVIEW_PREFLIGHT"
+contains 'SCHEMA_VERSION = 2' "$REVIEW_PREFLIGHT"
+contains 'changed_path_records_fingerprint' "$REVIEW_PREFLIGHT"
+contains 'base_sha = require_digest' "$REVIEW_PREFLIGHT"
+contains '"patch_base_tree": patch_base_tree' "$REVIEW_PREFLIGHT"
+contains 'test_round_three_rejects_stale_or_unbound_approval_record' "$REVIEW_PREFLIGHT_TEST"
+contains 'test_changed_path_outside_target_scope_is_rejected' "$REVIEW_PREFLIGHT_TEST"
+contains 'test_changed_target_path_set_requires_new_reviewer_lifecycle' "$REVIEW_PREFLIGHT_TEST"
+contains 'test_omitted_changed_path_does_not_match_original_fingerprint' "$REVIEW_PREFLIGHT_TEST"
+contains 'test_base_ref_and_sha_move_with_same_tree_reuses_review' "$REVIEW_PREFLIGHT_TEST"
+contains 'test_changed_patch_base_tree_requires_new_reviewer_lifecycle' "$REVIEW_PREFLIGHT_TEST"
+contains 'Round 3 request packet' "$DELIVERY"
 contains 'Round 1' "$DELIVERY"
 contains 'Round 2' "$DELIVERY"
 contains 'Round 3' "$DELIVERY"
@@ -224,6 +246,8 @@ PY
   codex/skills/git-workflow/tests/test_external_pr_snapshot.py \
   codex/skills/git-workflow/tests/test_issue_preflight.py \
   codex/skills/git-workflow/tests/test_issue_preflight_fixtures.py \
+  codex/skills/git-workflow/tests/test_review_preflight.py \
+  codex/skills/git-workflow/tests/test_review_preflight_docs.py \
   codex/skills/parallel-worktree/tests/unit/test_preflight_helper_gate.py)
 
 printf 'workflow-policy: passed\n'

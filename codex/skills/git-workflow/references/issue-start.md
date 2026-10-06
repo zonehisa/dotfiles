@@ -15,6 +15,27 @@ R1-R4 implementation starts in an Issue-dedicated Worktree from the latest remot
 - Worktree selection does not create an independent Codex task or require `implementer_luna`; the Coordinator
   may implement directly in the selected Worktree. Reuse the same Worktree when resuming the Issue lifecycle.
 
+## Freeze the request contract
+
+Before any work begins—including Coordinator-only implementation, Worktree provisioning, source edits, or child dispatch—record this short contract:
+
+```text
+Issue / repository / base (freeze the base SHA after fetch):
+Objective:
+Writable paths:
+Acceptance criteria (observable):
+Out of scope:
+Risk and reason:
+Budget (tokens / tool calls / retries; set concrete limits before any work begins):
+Output (changed paths / checks and results / unresolved items):
+```
+
+Use the same acceptance criteria for the Issue preflight and the completion review; do not create a
+second divergent criteria list after implementation. Keep the normal Coordinator-only path single-agent.
+If a child is justified by independent work, freeze its allowed tools, write scope, budget, success
+criteria, and output format in its handoff before dispatch. Existing reviewer, risk, approval, and
+Worktree rules still apply.
+
 ## Conditional roles
 
 - Use the saved `git_operator_luna` only for an explicitly authorized external Git/GitHub write such
